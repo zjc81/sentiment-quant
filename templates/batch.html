@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}批量分析 - SentimentQuant{% endblock %}
+{% block header_title %}批量情绪分析对比{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-title">输入股票</div>
+    <textarea id="stock-codes" class="form-textarea"
+        placeholder="输入股票代码，一行一个或用逗号分隔&#10;例如:&#10;600519&#10;000858&#10;601318,000001,600036"
+        rows="5"></textarea>
+    <div style="display:flex;gap:8px;margin-top:8px;">
+        <select id="batch-days" class="form-select" style="flex:1;">
+            <option value="3">近3天</option>
+            <option value="7" selected>近7天</option>
+            <option value="14">近14天</option>
+        </select>
+        <select id="batch-max-news" class="form-select" style="flex:1;">
+            <option value="5">5条/股</option>
+            <option value="10" selected>10条/股</option>
+            <option value="20">20条/股</option>
+        </select>
+    </div>
+    <button class="btn btn-primary btn-block" onclick="runBatchAnalysis()" style="margin-top:8px;">开始批量分析</button>
+</div>
+
+<div id="batch-result" style="display:none;">
+    <div class="card">
+        <div class="card-title">分析结果排名</div>
+        <div id="batch-list"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+async function runBatchAnalysis() {
+    const codesRaw = document.getElementById("stock-codes").value.trim();
+    if (!codesRaw) return showToast("请输入至少一只股票代码");
+
+    const codes = codesRaw.replace(/\n/g, ",").replace(/\s/g, "").split(",").filter(Boolean);
+    if (!codes.length) return showToast("无法解析股票代码");
+    if (codes.length > 20) return showToast("最多支持20只股票同时分析");
+
+    showLoading();
+    try {
+        const resp = await fetch("/api/batch_analysis", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                codes: codesRaw,
+                days: parseInt(document.getElementById("batch-days").value),
+                max_news: parseInt(document.getElementById("batch-max-news").value)
+            })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            renderBatchResult(data.data, data.report_url);
+        } else {
+            showToast(data.error || "分析失败");
+        }
+    } catch(e) {
+        showToast("错误: " + e.message);
+    }
+    hideLoading();
+}
+
+function renderBatchResult(results, reportUrl) {
+    const section = document.getElementById("batch-result");
+    section.style.display = "block";
+    const list = document.getElementById("batch-list");
+
+    list.innerHTML = results.map((r, i) => {
+        const score = (r.score * 100).toFixed(0);
+        const color = r.score >= 0.6 ? "var(--color-up)" : r.score >= 0.4 ? "var(--color-warn)" : "var(--color-down)";
+        return `<div class="rank-item">
+            <div class="rank-num">${i + 1}</div>
+            <div class="rank-info">
+                <div class="rank-name">${r.name} <span style="color:var(--text-muted);font-size:12px;">${r.code}</span></div>
+                <div class="rank-meta">新闻${r.news_count}条 | 置信度${(r.confidence*100).toFixed(0)}%</div>
+            </div>
+            <div class="rank-score" style="color:${color}">
+                <div style="font-size:22px;font-weight:bold;">${score}</div>
+                <div style="font-size:11px;">${r.label}</div>
+            </div>
+        </div>`;
+    }).join("");
+
+    if (reportUrl) {
+        list.innerHTML += `<div style="margin-top:12px;text-align:center;">
+            <a href="${reportUrl}" target="_blank" class="btn btn-primary" style="display:inline-block;text-decoration:none;">查看对比报告</a>
+        </div>`;
+    }
+
+    section.scrollIntoView({behavior: "smooth"});
+}
+</script>
+{% endblock %}

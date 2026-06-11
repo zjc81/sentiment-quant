@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}策略回测 - SentimentQuant{% endblock %}
+{% block header_title %}多策略回测对比{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-title">选择股票</div>
+    <div class="search-box">
+        <input type="text" id="backtest-search" class="search-input"
+               placeholder="搜索股票代码或名称..."
+               autocomplete="off">
+        <div id="search-results" class="search-results" style="display:none;"></div>
+    </div>
+    <div id="bt-selected" style="display:none;margin-top:8px;padding:10px;background:var(--bg-card);border-radius:8px;">
+        <strong id="bt-name"></strong>
+        <span style="float:right;color:var(--text-muted);" id="bt-code"></span>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">回测参数</div>
+    <div class="form-group">
+        <label>初始资金（元）</label>
+        <input type="number" id="bt-capital" class="form-input" value="100000" step="10000">
+    </div>
+    <div class="form-group">
+        <label>回溯天数</label>
+        <select id="bt-lookback" class="form-select">
+            <option value="3">近3天</option>
+            <option value="7" selected>近7天</option>
+            <option value="14">近14天</option>
+            <option value="30">近30天</option>
+        </select>
+    </div>
+    <button class="btn btn-primary btn-block" onclick="runBacktest()">开始回测</button>
+    <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">
+        将对买入持有、纯情绪信号、情绪+均线、RSI均值回归、布林带突破、动量策略共6种策略进行回测
+    </div>
+</div>
+
+<div id="bt-result" style="display:none;">
+    <div class="card">
+        <div class="card-title" id="bt-result-title">回测结果</div>
+        <div id="bt-summary"></div>
+        <div id="bt-table-wrapper" style="overflow-x:auto;margin-top:12px;"></div>
+        <div id="bt-best" style="margin-top:12px;"></div>
+        <div style="margin-top:12px;text-align:center;" id="bt-report-link"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let btCode = "", btName = "";
+
+let searchTimer = null;
+document.getElementById("backtest-search").addEventListener("input", function() {
+    clearTimeout(searchTimer);
+    const q = this.value.trim();
+    if (!q) { document.getElementById("search-results").style.display = "none"; return; }
+    searchTimer = setTimeout(async () => {
+        const resp = await fetch(`/api/search_stocks?q=${encodeURIComponent(q)}`);
+        const data = await resp.json();
+        const box = document.getElementById("search-results");
+        box.innerHTML = data.success && data.data.length
+            ? data.data.map(s => `<div class="search-item" onclick="selBt('${s.code}','${s.name}')">${s.code} ${s.name}</div>`).join("")
+            : '<div class="search-item">未找到</div>';
+        box.style.display = "block";
+    }, 300);
+});
+
+function selBt(code, name) {
+    btCode = code; btName = name;
+    document.getElementById("backtest-search").value = `${code} ${name}`;
+    document.getElementById("search-results").style.display = "none";
+    document.getElementById("bt-selected").style.display = "block";
+    document.getElementById("bt-name").textContent = name;
+    document.getElementById("bt-code").textContent = code;
+}
+
+async function runBacktest() {
+    if (!btCode) {
+        const input = document.getElementById("backtest-search").value.trim();
+        if (!input) return showToast("请先搜索并选择股票");
+        const resp = await fetch(`/api/search_stocks?q=${encodeURIComponent(input)}`);
+        const data = await resp.json();
+        if (data.success && data.data.length) selBt(data.data[0].code, data.data[0].name);
+        else return showToast("未找到该股票");
+    }
+
+    showLoading();
+    try {
+        const resp = await fetch("/api/backtest", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                code: btCode, name: btName,
+                lookback: parseInt(document.getElementById("bt-lookback").value),
+                capital: parseFloat(document.getElementById("bt-capital").value) || 100000
+            })
+        });
+        const data = await resp.json();
+        if (data.success) renderBtResult(data);
+        else showToast(data.error || "回测失败");
+    } catch(e) {
+        showToast("错误: " + e.message);
+    }
+    hideLoading();
+}
+
+function renderBtResult(data) {
+    const section = document.getElementById("bt-result");
+    section.style.display = "block";
+    document.getElementById("bt-result-title").textContent = `${data.stock_code} ${data.stock_name} - 回测结果`;
+
+    const best = data.best_strategy;
+    document.getElementById("bt-summary").innerHTML = `
+        <div style="background:var(--accent-bg);border-radius:8px;padding:12px;margin-bottom:8px;">
+            <div style="font-size:14px;color:var(--accent);">最佳策略</div>
+            <div style="font-size:20px;font-weight:bold;">${best.strategy_name} - 收益率 ${best.total_return}%</div>
+        </div>`;
+
+    document.getElementById("bt-table-wrapper").innerHTML = `
+        <table class="bt-table">
+            <thead><tr>
+                <th>策略</th><th>总收益%</th><th>年化%</th><th>最大回撤%</th><th>夏普</th><th>胜率%</th><th>交易次数</th>
+            </tr></thead>
+            <tbody>${data.data.map(s => {
+                const tr = s.total_return;
+                const clr = tr > 0 ? "var(--color-up)" : tr < 0 ? "var(--color-down)" : "var(--text-secondary)";
+                return `<tr>
+                    <td>${s.strategy_name}</td>
+                    <td style="color:${clr};font-weight:bold;">${tr > 0 ? "+" : ""}${tr}%</td>
+                    <td>${s.annual_return}%</td>
+                    <td>${s.max_drawdown}%</td>
+                    <td>${s.sharpe_ratio}</td>
+                    <td>${s.win_rate}%</td>
+                    <td>${s.total_trades}</td>
+                </tr>`;
+            }).join("")}</tbody></table>`;
+
+    document.getElementById("bt-report-link").innerHTML = `
+        <a href="${data.report_url}" target="_blank" class="btn btn-primary btn-block" style="display:block;text-align:center;text-decoration:none;">查看完整回测报告</a>`;
+
+    section.scrollIntoView({behavior: "smooth"});
+}
+
+document.addEventListener("click", function(e) {
+    if (!e.target.closest("#backtest-search") && !e.target.closest("#search-results")) {
+        document.getElementById("search-results").style.display = "none";
+    }
+});
+</script>
+{% endblock %}

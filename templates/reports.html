@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}历史报告 - SentimentQuant{% endblock %}
+{% block header_title %}历史报告列表{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+        <span>已生成报告</span>
+        <button class="btn btn-sm btn-secondary" onclick="loadReports()">刷新</button>
+    </div>
+    <div id="reports-list">
+        <div style="text-align:center;color:var(--text-muted);padding:20px;">加载中...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+async function loadReports() {
+    try {
+        const resp = await fetch("/api/reports");
+        const data = await resp.json();
+        const list = document.getElementById("reports-list");
+        if (!data.data || !data.data.length) {
+            list.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:20px;">暂无报告，请先进行分析或回测</div>';
+            return;
+        }
+        list.innerHTML = data.data.map((r, i) => `
+            <div class="report-item" onclick="window.open('/reports/view/${r.name}', '_blank')">
+                <div class="report-icon">📄</div>
+                <div class="report-info">
+                    <div class="report-name">${r.name}</div>
+                    <div class="report-meta">${r.mtime} | ${(r.size/1024).toFixed(1)} KB</div>
+                </div>
+                <div class="report-arrow">→</div>
+            </div>
+        `).join("");
+    } catch(e) {
+        document.getElementById("reports-list").innerHTML = '<div style="text-align:center;color:var(--color-down);padding:20px;">加载失败: ' + e.message + '</div>';
+    }
+}
+document.addEventListener("DOMContentLoaded", loadReports);
+</script>
+{% endblock %}

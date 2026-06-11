@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}单股分析 - SentimentQuant{% endblock %}
+{% block header_title %}单股深度分析{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-title">选择股票</div>
+    <div class="search-box">
+        <input type="text" id="stock-search" class="search-input"
+               placeholder="搜索股票代码或名称..."
+               autocomplete="off">
+        <div id="search-results" class="search-results" style="display:none;"></div>
+    </div>
+    <div id="selected-stock" style="display:none;margin-top:8px;padding:10px;background:var(--bg-card);border-radius:8px;">
+        <strong id="selected-name"></strong>
+        <span style="float:right;color:var(--text-muted);" id="selected-code"></span>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">分析参数</div>
+    <div class="form-group">
+        <label>回溯天数</label>
+        <select id="lookback-days" class="form-select">
+            <option value="3">近3天</option>
+            <option value="7" selected>近7天（推荐）</option>
+            <option value="14">近14天</option>
+            <option value="30">近30天</option>
+        </select>
+    </div>
+    <div class="form-group">
+        <label>最大新闻数</label>
+        <select id="max-news" class="form-select">
+            <option value="10">10条</option>
+            <option value="20" selected>20条（推荐）</option>
+            <option value="30">30条</option>
+            <option value="50">50条</option>
+        </select>
+    </div>
+    <button class="btn btn-primary btn-block" onclick="runAnalysis()">开始分析</button>
+</div>
+
+<div id="result-section" style="display:none;">
+    <div class="card" id="result-card"></div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let selectedCode = "", selectedName = "";
+
+let searchTimer = null;
+document.getElementById("stock-search").addEventListener("input", function() {
+    clearTimeout(searchTimer);
+    const q = this.value.trim();
+    if (!q) { document.getElementById("search-results").style.display = "none"; return; }
+    searchTimer = setTimeout(async () => {
+        const resp = await fetch(`/api/search_stocks?q=${encodeURIComponent(q)}`);
+        const data = await resp.json();
+        const box = document.getElementById("search-results");
+        if (!data.data || !data.data.length) {
+            box.innerHTML = '<div class="search-item">未找到</div>';
+        } else {
+            box.innerHTML = data.data.map(s =>
+                `<div class="search-item" onclick="selectStock('${s.code}','${s.name}')">${s.code} ${s.name}</div>`
+            ).join("");
+        }
+        box.style.display = "block";
+    }, 300);
+});
+
+function selectStock(code, name) {
+    selectedCode = code; selectedName = name;
+    document.getElementById("stock-search").value = `${code} ${name}`;
+    document.getElementById("search-results").style.display = "none";
+    document.getElementById("selected-stock").style.display = "block";
+    document.getElementById("selected-name").textContent = name;
+    document.getElementById("selected-code").textContent = code;
+}
+
+async function runAnalysis() {
+    if (!selectedCode) {
+        const input = document.getElementById("stock-search").value.trim();
+        if (!input) return showToast("请先搜索并选择股票");
+        const resp = await fetch(`/api/search_stocks?q=${encodeURIComponent(input)}`);
+        const data = await resp.json();
+        if (data.success && data.data.length) {
+            selectStock(data.data[0].code, data.data[0].name);
+        } else { return showToast("未找到该股票"); }
+    }
+
+    showLoading();
+    try {
+        const resp = await fetch("/api/single_analysis", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                code: selectedCode,
+                name: selectedName,
+                days: parseInt(document.getElementById("lookback-days").value),
+                max_news: parseInt(document.getElementById("max-news").value)
+            })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            renderResult(data.data);
+        } else {
+            showToast(data.error || "分析失败");
+        }
+    } catch(e) {
+        showToast("错误: " + e.message);
+    }
+    hideLoading();
+}
+
+function renderResult(d) {
+    const section = document.getElementById("result-section");
+    section.style.display = "block";
+    const score = (d.score * 100).toFixed(0);
+    const color = d.score >= 0.6 ? "var(--color-up)" : d.score >= 0.4 ? "var(--color-warn)" : "var(--color-down)";
+
+    document.getElementById("result-card").innerHTML = `
+        <div class="card-title">分析结果</div>
+        <div style="text-align:center;padding:12px 0;">
+            <div style="font-size:48px;font-weight:bold;color:${color};">${score}</div>
+            <div style="font-size:14px;color:var(--text-secondary);">综合情感得分 / 100</div>
+            <div style="font-size:20px;color:${color};margin-top:4px;">${d.label}</div>
+        </div>
+        <div class="info-row"><span>股票</span><span>${d.stock_code} ${d.stock_name}</span></div>
+        <div class="info-row"><span>当前价格</span><span>${d.price}</span></div>
+        <div class="info-row"><span>涨跌幅</span><span style="color:${(d.pct_change||0)>=0?'var(--color-up)':'var(--color-down)'}">${d.pct_change}%</span></div>
+        <div class="info-row"><span>新闻总数</span><span>${d.news_count}条</span></div>
+        <div class="info-row"><span>正面/负面/中性</span><span style="color:var(--color-up)">${d.positive_count}</span> / <span style="color:var(--color-down)">${d.negative_count}</span> / ${d.neutral_count}</div>
+        <div class="info-row"><span>正面占比</span><span>${(d.positive_ratio*100).toFixed(0)}%</span></div>
+        <div class="info-row"><span>置信度</span><span>${(d.confidence*100).toFixed(0)}%</span></div>
+        <div class="info-row"><span>情感波动</span><span>${(d.volatility*100).toFixed(1)}% (${d.volatility_label})</span></div>
+        <div class="info-row"><span>风险等级</span><span>${d.risk_level}</span></div>
+        <div class="info-row"><span>影响级别</span><span>${d.impact_level}</span></div>
+        <div class="info-row"><span>投资者情绪指数</span><span>${d.investor_sentiment}</span></div>
+        <div style="margin-top:10px;padding:10px;background:var(--bg-card);border-radius:8px;font-size:13px;line-height:1.6;">
+            <div style="color:var(--accent);font-weight:500;margin-bottom:6px;">分析总结</div>
+            <div style="color:var(--text-secondary);">${d.summary_text}</div>
+        </div>
+        <div style="margin-top:8px;padding:10px;background:var(--bg-card);border-radius:8px;font-size:13px;line-height:1.6;">
+            <div style="color:var(--accent);font-weight:500;margin-bottom:6px;">市场预期</div>
+            <div style="color:var(--text-secondary);">${d.market_expectation}</div>
+        </div>
+        <div style="margin-top:12px;">
+            <a href="${d.report_url}" target="_blank" class="btn btn-primary btn-block" style="display:block;text-align:center;text-decoration:none;">查看完整HTML报告</a>
+        </div>`;
+    section.scrollIntoView({behavior: "smooth"});
+}
+
+document.addEventListener("click", function(e) {
+    if (!e.target.closest("#stock-search") && !e.target.closest("#search-results")) {
+        document.getElementById("search-results").style.display = "none";
+    }
+});
+</script>
+{% endblock %}

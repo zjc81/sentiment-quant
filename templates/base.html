@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#1a1a2e">
+    <title>{% block title %}SentimentQuant{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/mobile.css">
+    <link rel="apple-touch-icon" href="/static/icon-192.png">
+    <link rel="manifest" href="/static/manifest.json">
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <!-- 顶部导航栏 -->
+    <header class="top-bar">
+        <div class="top-bar-title">{% block header_title %}市场情绪量化系统{% endblock %}</div>
+        <div class="top-bar-actions">
+            {% block header_actions %}{% endblock %}
+        </div>
+    </header>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- 底部导航栏 -->
+    <nav class="bottom-nav">
+        <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}">
+            <span class="nav-icon">🏠</span>
+            <span class="nav-label">首页</span>
+        </a>
+        <a href="/analyze" class="nav-item {% if request.path == '/analyze' %}active{% endif %}">
+            <span class="nav-icon">🔍</span>
+            <span class="nav-label">分析</span>
+        </a>
+        <a href="/batch" class="nav-item {% if request.path == '/batch' %}active{% endif %}">
+            <span class="nav-icon">📊</span>
+            <span class="nav-label">批量</span>
+        </a>
+        <a href="/backtest" class="nav-item {% if request.path == '/backtest' %}active{% endif %}">
+            <span class="nav-icon">🔄</span>
+            <span class="nav-label">回测</span>
+        </a>
+        <a href="/reports" class="nav-item {% if request.path == '/reports' %}active{% endif %}">
+            <span class="nav-icon">📁</span>
+            <span class="nav-label">报告</span>
+        </a>
+    </nav>
+
+    <!-- Toast 提示 -->
+    <div id="toast" class="toast"></div>
+
+    <!-- 加载遮罩 -->
+    <div id="loading-overlay" class="loading-overlay" style="display:none;">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">加载中...</div>
+    </div>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/sw.js');
+        }
+    </script>
+    <script src="/static/js/mobile.js"></script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

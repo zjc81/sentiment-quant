@@ -1,0 +1,15 @@
+# Render 云部署配置
+# 文档: https://render.com/docs
+
+services:
+  - type: web
+    name: sentiment-quant
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn mobile_app:app --bind 0.0.0.0:$PORT --timeout 120
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.0
+      - key: PYTHONIOENCODING
+        value: utf-8

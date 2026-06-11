@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}SentimentQuant - 首页{% endblock %}
+
+{% block content %}
+<!-- 大盘指数卡片 -->
+<div class="card" id="market-card">
+    <div class="card-title">大盘指数</div>
+    <div class="index-grid" id="market-indexes">
+        <div class="index-item skeleton">上证指数<br>加载中...</div>
+        <div class="index-item skeleton">深证成指<br>加载中...</div>
+        <div class="index-item skeleton">创业板指<br>加载中...</div>
+    </div>
+</div>
+
+<!-- 快速搜索 -->
+<div class="card">
+    <div class="card-title">快速分析</div>
+    <div class="search-box">
+        <input type="text" id="quick-search" class="search-input"
+               placeholder="输入股票代码或名称，如: 600519 或 贵州茅台"
+               autocomplete="off">
+        <div id="search-results" class="search-results" style="display:none;"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;">
+        <select id="quick-days" class="form-select" style="flex:1;">
+            <option value="3">近3天</option>
+            <option value="7" selected>近7天</option>
+            <option value="14">近14天</option>
+            <option value="30">近30天</option>
+        </select>
+        <button class="btn btn-primary" onclick="quickAnalyze()" style="flex:1;">开始分析</button>
+    </div>
+</div>
+
+<!-- 功能入口 -->
+<div class="card">
+    <div class="card-title">功能导航</div>
+    <div class="feature-grid">
+        <a href="/analyze" class="feature-item">
+            <span class="feature-icon">🔍</span>
+            <span class="feature-name">单股分析</span>
+            <span class="feature-desc">深度情绪分析报告</span>
+        </a>
+        <a href="/batch" class="feature-item">
+            <span class="feature-icon">📊</span>
+            <span class="feature-name">批量分析</span>
+            <span class="feature-desc">多股对比排名</span>
+        </a>
+        <a href="/backtest" class="feature-item">
+            <span class="feature-icon">🔄</span>
+            <span class="feature-name">策略回测</span>
+            <span class="feature-desc">六策略对比</span>
+        </a>
+        <a href="/reports" class="feature-item">
+            <span class="feature-icon">📁</span>
+            <span class="feature-name">历史报告</span>
+            <span class="feature-desc">查看已生成报告</span>
+        </a>
+        <a href="/about" class="feature-item">
+            <span class="feature-icon">ℹ️</span>
+            <span class="feature-name">关于系统</span>
+            <span class="feature-desc">使用说明</span>
+        </a>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// 加载大盘指数
+async function loadMarketIndexes() {
+    try {
+        const resp = await fetch("/api/market_index");
+        const data = await resp.json();
+        if (data.success) {
+            const container = document.getElementById("market-indexes");
+            container.innerHTML = "";
+            for (const [name, info] of Object.entries(data.data)) {
+                const change = parseFloat(info.pct_change) || 0;
+                const price = parseFloat(info.price) || 0;
+                const clr = change > 0 ? "var(--color-up)" : change < 0 ? "var(--color-down)" : "var(--text-secondary)";
+                const prefix = change > 0 ? "+" : "";
+                container.innerHTML += `
+                    <div class="index-item">
+                        <div class="index-name">${name}</div>
+                        <div class="index-price">${price.toFixed(2)}</div>
+                        <div class="index-change" style="color:${clr}">${prefix}${change.toFixed(2)}%</div>
+                    </div>`;
+            }
+        }
+    } catch(e) { console.error(e); }
+}
+document.addEventListener("DOMContentLoaded", loadMarketIndexes);
+
+// 搜索
+let searchTimer = null;
+document.getElementById("quick-search").addEventListener("input", function() {
+    clearTimeout(searchTimer);
+    const q = this.value.trim();
+    if (!q) {
+        document.getElementById("search-results").style.display = "none";
+        return;
+    }
+    searchTimer = setTimeout(async () => {
+        const resp = await fetch(`/api/search_stocks?q=${encodeURIComponent(q)}`);
+        const data = await resp.json();
+        const box = document.getElementById("search-results");
+        if (!data.success || !data.data.length) {
+            box.innerHTML = '<div class="search-item">未找到匹配股票</div>';
+            box.style.display = "block";
+            return;
+        }
+        box.innerHTML = data.data.map(s =>
+            `<div class="search-item" onclick="selectStock('${s.code}','${s.name}')">${s.code} ${s.name}</div>`
+        ).join("");
+        box.style.display = "block";
+    }, 300);
+});
+
+function selectStock(code, name) {
+    document.getElementById("quick-search").value = `${code} ${name}`;
+    document.getElementById("search-results").style.display = "none";
+    document.getElementById("quick-search").dataset.code = code;
+    document.getElementById("quick-search").dataset.name = name;
+}
+
+async function quickAnalyze() {
+    const input = document.getElementById("quick-search");
+    let code = input.dataset.code || input.value.trim();
+    let name = input.dataset.name || "";
+    if (!code) return showToast("请先输入股票代码");
+
+    if (!/^\d{6}/.test(code)) {
+        const resp = await fetch(`/api/search_stocks?q=${encodeURIComponent(code)}`);
+        const data = await resp.json();
+        if (data.success && data.data.length) {
+            code = data.data[0].code;
+            name = data.data[0].name;
+        } else {
+            return showToast("未找到该股票");
+        }
+    }
+
+    showLoading();
+    try {
+        const resp = await fetch("/api/single_analysis", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                code: code, name: name,
+                days: parseInt(document.getElementById("quick-days").value),
+                max_news: 20
+            })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showResultModal(data.data);
+        } else {
+            showToast(data.error || "分析失败");
+        }
+    } catch(e) {
+        showToast("网络错误: " + e.message);
+    }
+    hideLoading();
+}
+
+function showResultModal(d) {
+    const score = (d.score * 100).toFixed(0);
+    const color = d.score >= 0.6 ? "var(--color-up)" : d.score >= 0.4 ? "var(--color-warn)" : "var(--color-down)";
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.innerHTML = `<div class="modal-content">
+        <div class="modal-header">
+            <span class="modal-close" onclick="this.closest('.modal').remove()">&times;</span>
+            <h3>${d.stock_code} ${d.stock_name}</h3>
+        </div>
+        <div class="modal-body">
+            <div class="score-circle" style="color:${color};font-size:48px;font-weight:bold;text-align:center;padding:16px 0;">
+                ${score}<span style="font-size:20px;">分</span>
+            </div>
+            <div style="text-align:center;font-size:18px;color:${color};margin-bottom:12px;">${d.label}</div>
+            <div class="info-row"><span>当前价格</span><span>${parseFloat(d.price||0).toFixed(2)}</span></div>
+            <div class="info-row"><span>涨跌幅</span><span style="color:${(d.pct_change||0)>=0?'var(--color-up)':'var(--color-down)'}">${parseFloat(d.pct_change||0).toFixed(2)}%</span></div>
+            <div class="info-row"><span>新闻数量</span><span>${d.news_count}条</span></div>
+            <div class="info-row"><span>正面/负面/中性</span><span>${d.positive_count}/${d.negative_count}/${d.neutral_count}</span></div>
+            <div class="info-row"><span>置信度</span><span>${(d.confidence*100).toFixed(0)}%</span></div>
+            <div class="info-row"><span>风险等级</span><span>${d.risk_level}</span></div>
+            <div class="info-row"><span>影响力</span><span>${d.impact_level}</span></div>
+            <div style="margin-top:12px;padding:10px;background:var(--bg-card);border-radius:8px;font-size:13px;color:var(--text-secondary);">
+                ${d.summary_text || "暂无总结"}
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="this.closest('.modal').remove()">关闭</button>
+            <button class="btn btn-primary" onclick="window.open('${d.report_url}', '_blank')">查看完整报告</button>
+        </div>
+    </div>`;
+    document.body.appendChild(modal);
+}
+
+// 点击空白关闭搜索建议
+document.addEventListener("click", function(e) {
+    if (!e.target.closest("#quick-search") && !e.target.closest("#search-results")) {
+        document.getElementById("search-results").style.display = "none";
+    }
+});
+</script>
+{% endblock %}

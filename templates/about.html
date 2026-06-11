@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}关于 - SentimentQuant{% endblock %}
+{% block header_title %}关于系统{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-title">SentimentQuant v2.0</div>
+    <div style="text-align:center;padding:16px 0;">
+        <div style="font-size:48px;margin-bottom:8px;">📈</div>
+        <div style="font-size:18px;font-weight:bold;">市场情绪分析与量化回测系统</div>
+        <div style="color:var(--text-muted);font-size:13px;margin-top:4px;">Mobile Edition</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">功能说明</div>
+    <div class="about-item">
+        <div class="about-icon">🔍</div>
+        <div>
+            <strong>单股深度分析</strong>
+            <div class="about-desc">抓取股票新闻，进行多维度情绪分析，生成交互式HTML报告</div>
+        </div>
+    </div>
+    <div class="about-item">
+        <div class="about-icon">📊</div>
+        <div>
+            <strong>批量对比分析</strong>
+            <div class="about-desc">对多只股票同时分析，按情绪得分排名，可视化对比</div>
+        </div>
+    </div>
+    <div class="about-item">
+        <div class="about-icon">🔄</div>
+        <div>
+            <strong>六策略回测</strong>
+            <div class="about-desc">对比买入持有/纯情绪/情绪+均线/RSI回归/布林带/动量策略表现</div>
+        </div>
+    </div>
+    <div class="about-item">
+        <div class="about-icon">📁</div>
+        <div>
+            <strong>历史报告</strong>
+            <div class="about-desc">浏览所有已生成的分析报告和回测报告</div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">技术栈</div>
+    <div class="tech-tags">
+        <span class="tech-tag">Python</span>
+        <span class="tech-tag">Flask</span>
+        <span class="tech-tag">AKShare</span>
+        <span class="tech-tag">SnowNLP</span>
+        <span class="tech-tag">Pandas</span>
+        <span class="tech-tag">Plotly</span>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">数据来源</div>
+    <div style="color:var(--text-secondary);font-size:13px;line-height:1.6;">
+        新闻数据：东方财富财经新闻API<br>
+        行情数据：东方财富实时行情API<br>
+        情感分析：SnowNLP + 中文关键词词典<br>
+        报告图表：Plotly 交互式可视化
+    </div>
+</div>
+
+<div class="card" style="text-align:center;">
+    <div style="color:var(--text-muted);font-size:12px;">
+        提示：本系统仅供学习研究使用，不构成投资建议<br>
+        投资有风险，入市需谨慎
+    </div>
+</div>
+{% endblock %}
