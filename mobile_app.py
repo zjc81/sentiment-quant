@@ -326,6 +326,7 @@ def api_batch_analysis():
 
 @app.route("/api/backtest", methods=["POST"])
 def api_backtest():
+    """策略回测（云端不支持 pandas，仅桌面版可用）"""
     if os.environ.get("RENDER") == "true":
         return jsonify({"success": False, "error": "回测功能仅支持桌面版，云端暂不可用"})
     try:
