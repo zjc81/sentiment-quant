@@ -72,7 +72,6 @@ def _import_data_fetcher():
         "get_company_announcements": get_company_announcements,
         "batch_get_news": batch_get_news,
     }
-
 def _cleanup():
     """释放内存"""
     gc.collect()
