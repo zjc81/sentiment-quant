@@ -110,15 +110,19 @@ def api_quote():
 @app.route("/api/market_index")
 def api_market_index():
     """获取市场指数"""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
     try:
-        data = get_market_index()
-        # 格式化价格和百分比，保留2位小数
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(get_market_index)
+            data = future.result(timeout=15)
         if data:
             for name, info in data.items():
                 info["price"] = round(info["price"], 2)
                 info["change"] = round(info["change"], 2)
                 info["pct_change"] = round(info["pct_change"], 2)
         return jsonify({"success": True, "data": data})
+    except FuturesTimeout:
+        return jsonify({"success": False, "error": "数据获取超时，请稍后重试"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
