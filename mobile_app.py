@@ -123,16 +123,19 @@ def about_page():
 # API 路由
 # =============================================================================
 
-@app.route("/api/search_stocks")
-def api_search_stocks():
-    q = request.args.get("q", "").strip()
-    if not q:
-        return jsonify({"success": False, "error": "请输入搜索关键词"})
+@app.route("/api/stock")
+def api_stock():
+    code = request.args.get("code", "").strip()
+    if not code:
+        return jsonify({"success": False, "error": "请输入股票代码"})
     try:
         fetchers = _import_data_fetcher()
-        results = fetchers["search_stocks"](q, top_n=20)
+        stock = fetchers["get_stock_by_code"](code)
+        # 兜底：搜索失败时纯数字代码直接返回
+        if not stock and code.strip().isdigit() and len(code.strip()) == 6:
+            stock = {"code": code.strip(), "name": f"{code.strip()}(股票)"}
         _cleanup()
-        return jsonify({"success": True, "data": results})
+        return jsonify(stock)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
