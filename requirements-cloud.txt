@@ -1,0 +1,25 @@
+# 市场情绪与量化分析系统 - 云部署依赖
+# 安装方式: pip install -r requirements-cloud.txt
+
+# ===== 核心数据 =====
+akshare>=1.16.0           # A股金融数据接口
+pandas>=2.0.0             # 数据处理
+numpy>=1.24.0             # 数值计算
+
+# ===== 交互式可视化 =====
+plotly>=5.18.0            # 交互式HTML图表（核心可视化引擎）
+
+# ===== 文本情感 =====
+snownlp>=0.12.3           # 中文情感分析（本地运行，无需API Key）
+
+# ===== 网络请求 =====
+requests>=2.31.0          # HTTP请求
+urllib3>=2.0.0            # HTTP底层支持
+
+# ===== 其他工具 =====
+python-dateutil>=2.8.0    # 日期处理
+colorama>=0.4.6           # 终端彩色输出
+
+# ===== Web框架 =====
+flask>=3.0.0              # Web框架
+gunicorn>=22.0.0          # WSGI服务器（云部署用）
