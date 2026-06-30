@@ -591,9 +591,7 @@ def get_real_time_quote(stock_code: str) -> Optional[Dict]:
 def get_market_index() -> Optional[Dict]:
     """
     获取大盘指数行情
-
-    Returns:
-        Optional[Dict]: 包含三大指数数据
+    ...
     """
     try:
         import akshare as ak
@@ -608,23 +606,6 @@ def get_market_index() -> Optional[Dict]:
         for name, code in indices.items():
             try:
                 data = ak.stock_zh_index_daily(symbol=code)
-                if data is not None and not data.empty:
-                    latest = data.iloc[-1]
-                    prev = data.iloc[-2]
-                    change = latest["close"] - prev["close"]
-                    pct = change / prev["close"] * 100
-                    result[name] = {
-                        "price": float(latest["close"]),
-                        "change": float(change),
-                        "pct_change": float(pct),
-                    }
-            except Exception:
-                continue
-
-        return result if result else None
-
-    except Exception:
-        return None
 
 
 # ======================================================================
