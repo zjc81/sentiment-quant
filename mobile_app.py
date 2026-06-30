@@ -48,19 +48,11 @@ def _get_report_generator():
     return ReportGenerator()
 
 def _import_data_fetcher():
-    _is_cloud = os.environ.get("RENDER") == "true"
-    if _is_cloud:
-        from core.cloud_fetcher import (
-            search_stocks, get_stock_news, get_stock_by_code,
-            get_kline_data, get_real_time_quote, get_market_index,
-            get_fund_flow, get_company_announcements, batch_get_news
-        )
-    else:
-        from core.data_fetcher import (
-            search_stocks, get_stock_news, get_stock_by_code,
-            get_kline_data, get_real_time_quote, get_market_index,
-            get_fund_flow, get_company_announcements, batch_get_news
-        )
+    from core.data_fetcher import (
+        search_stocks, get_stock_news, get_stock_by_code,
+        get_kline_data, get_real_time_quote, get_market_index,
+        get_fund_flow, get_company_announcements, batch_get_news
+    )
     return {
         "search_stocks": search_stocks,
         "get_stock_news": get_stock_news,
