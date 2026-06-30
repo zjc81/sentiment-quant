@@ -64,7 +64,7 @@ def get_all_stocks(force_refresh: bool = False) -> pd.DataFrame:
         except Exception:
             pass
 
-        try:
+            try:
         import akshare as ak
         df = _safe_ak_call(ak.stock_info_a_code_name)
         df = df.rename(columns={"code": "code", "name": "name"})
@@ -75,9 +75,13 @@ def get_all_stocks(force_refresh: bool = False) -> pd.DataFrame:
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return df
-    except Exception:
-        pass
-    raise RuntimeError("无法获取股票列表且无缓存")
+    except Exception as e:
+        if cache_file.exists():
+            with open(cache_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return pd.DataFrame(data["stocks"])
+        raise RuntimeError(f"无法获取股票列表且无缓存: {e}")
+
 
 
 def search_stocks(query: str, top_n: int = 20) -> List[Dict]:
