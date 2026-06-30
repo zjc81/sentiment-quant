@@ -1,9 +1,11 @@
-# 市场情绪与量化分析系统 - 云部署依赖（轻量版，不含 akshare/pandas）
+# 市场情绪与量化分析系统 - 云部署依赖（不含 akshare）
 # 安装方式: pip install -r requirements-cloud.txt
-# 内存占用: ~200MB（适配 Render 免费 512MB）
+# 内存占用: ~300MB（适配 Render 免费 512MB）
 
-# ===== 核心数值计算 (sentiment.py / report.py 使用) =====
+# ===== 核心数值计算 =====
 numpy>=1.24.0             # 数值计算
+pandas>=2.0.0             # 数据处理（data_fetcher 需要）
+tqdm>=4.64.0              # 进度条
 
 # ===== 交互式可视化 =====
 plotly>=5.18.0            # 交互式HTML图表（核心可视化引擎）
