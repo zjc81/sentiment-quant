@@ -692,6 +692,18 @@ def generate_report(
     charts.append(f'<div class="chart-card full-width"><div class="chart-title">📊 情感得分分布</div>{_plotly_histogram(uid10, scores_pct, "情感得分分布", "#00ff88", nbins, 300)}</div>')
 
     # Chart 11: K线 + 情绪叠加
+    # 防御性截取：只保留最近120天K线数据（防止历史旧数据）
+    if kline_data and len(kline_data) > 3:
+        _orig_n = len(kline_data)
+        from datetime import timedelta as _td
+        _cut = (datetime.now() - _td(days=120)).strftime("%Y-%m-%d")
+        _filt_k = [k for k in kline_data if k.get("date", "") >= _cut]
+        if _filt_k and len(_filt_k) >= 3:
+            kline_data = _filt_k
+        else:
+            kline_data = kline_data[-120:]
+        if len(kline_data) != _orig_n:
+            print(f"[REPORT] K线截取: {_orig_n}条 -> {len(kline_data)}条")
     if kline_data and len(kline_data) >= 3:
         uid11 = f"kline_{_uid()}"
         kline_chart = _plotly_kline(uid11, kline_data, sentiment_result, 550)
@@ -971,6 +983,27 @@ def generate_backtest_report(
     # 找最佳策略
     best_key = max(valid_results.keys(), key=lambda k: valid_results[k].get("total_return", -999))
     best_res = valid_results[best_key]
+
+    # ---- 防御性K线日期截取（防止历史旧数据污染图表） ----
+    from datetime import timedelta
+    _today_str = datetime.now().strftime("%Y-%m-%d")
+    _cutoff_date = (datetime.now() - timedelta(days=lookback_days * 2)).strftime("%Y-%m-%d")
+    if kline_data and len(kline_data) > 3:
+        _original_count = len(kline_data)
+        # 过滤：只保留最近 lookback_days*2 天的K线数据
+        _filtered = [k for k in kline_data if k.get("date", "") >= _cutoff_date]
+        if _filtered:
+            # 确保至少有足够的数据点用于显示
+            if len(_filtered) >= 3:
+                kline_data = _filtered
+            else:
+                # 如果过滤后太少，取最后N条作为保底
+                kline_data = kline_data[-max(lookback_days, 30):]
+        else:
+            # 过滤结果为空（日期格式可能不匹配），取最后N条
+            kline_data = kline_data[-max(lookback_days, 30):]
+        if len(kline_data) != _original_count:
+            print(f"[BT-REPORT] K线截取: {_original_count}条 -> {len(kline_data)}条 ( cutoff={_cutoff_date} )")
 
     # ---- 图表1：权益曲线对比 ----
     equity_chart_html = ""
