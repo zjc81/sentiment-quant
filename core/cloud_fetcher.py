@@ -177,12 +177,16 @@ def batch_get_news(stock_codes: List[str], days: int = DEFAULT_LOOKBACK_DAYS,
 # ======================================================================
 
 def get_kline_data(stock_code: str, period: str = "daily", days: int = 60) -> Optional[List[Dict]]:
-    """获取K线数据，返回 List[Dict]"""
+    """获取K线数据，返回 List[Dict]。使用 beg 参数严格限制起始日期，防止返回全量历史数据。"""
     import requests
+    from datetime import datetime, timedelta
 
     try:
         secid = _get_secid(stock_code)
         klt = {"daily": 101, "weekly": 102, "monthly": 103}.get(period, 101)
+
+        # 计算 beg 起始日期（往前推 days*2 天留余量），防止 API 忽略 lmt 返回全量历史数据
+        beg_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
 
         url = (
             f"https://push2his.eastmoney.com/api/qt/stock/kline/get"
@@ -190,7 +194,7 @@ def get_kline_data(stock_code: str, period: str = "daily", days: int = 60) -> Op
             f"&fields1=f1,f2,f3,f4,f5,f6"
             f"&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
             f"&klt={klt}&fqt=1"
-            f"&end=20500101&lmt={days + 30}"
+            f"&end=20500101&beg={beg_date}&lmt={days + 10}"
         )
 
         resp = requests.get(url, headers=_get_headers(), timeout=8)
@@ -213,9 +217,17 @@ def get_kline_data(stock_code: str, period: str = "daily", days: int = 60) -> Op
             })
 
         records.sort(key=lambda x: x["date"])
-        return records[-days:] if len(records) > days else records
+        # 二次保险：只保留最近 days 条
+        result = records[-days:] if len(records) > days else records
 
-    except Exception:
+        # 日志：输出数据范围便于调试
+        if result:
+            print(f"[KLINE] {stock_code}: 获取 {len(records)} 条, 截取 {len(result)} 条, "
+                  f"范围 {result[0]['date']} ~ {result[-1]['date']}")
+        return result
+
+    except Exception as e:
+        print(f"[KLINE] {stock_code} 获取异常: {e}")
         return None
 
 
