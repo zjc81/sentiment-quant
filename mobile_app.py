@@ -441,6 +441,7 @@ def api_market_index():
 
 @app.route("/api/single_analysis", methods=["POST"])
 def api_single_analysis():
+    _t0 = time.time()
     try:
         data = request.get_json()
         stock_code = data.get("code", "").strip()
@@ -451,6 +452,8 @@ def api_single_analysis():
         if not stock_code:
             return jsonify({"success": False, "error": "请输入股票代码"})
 
+        print(f"[ANALYZE] 开始分析 {stock_code} (days={days}, max_news={max_news})")
+
         f = _get_fetchers()
         if not stock_name:
             info = f["get_stock_by_code"](stock_code)
@@ -458,6 +461,7 @@ def api_single_analysis():
                 stock_name = info.get("name", stock_code)
 
         news_list = f["get_stock_news"](stock_code, days=days, max_news=max_news)
+        print(f"[ANALYZE] 新闻获取完成 ({len(news_list)}条, {time.time()-_t0:.1f}s)")
         if not news_list:
             return jsonify({"success": False, "error": f"未找到 {stock_code} 的相关新闻"})
 
@@ -466,12 +470,14 @@ def api_single_analysis():
             return jsonify({"success": False, "error": "情感分析引擎初始化失败，请稍后重试"})
         sentiment_result = analyzer.analyze(news_list)
         _cleanup()
+        print(f"[ANALYZE] 情感分析完成 ({time.time()-_t0:.1f}s)")
 
         kline_data = f["get_kline_data"](stock_code, days=max(60, days))
         quote = f["get_real_time_quote"](stock_code)
         market = f["get_market_index"]()
         fund_flow = f["get_fund_flow"](stock_code, days=min(5, days))
         announcements = f["get_company_announcements"](stock_code, days=days)
+        print(f"[ANALYZE] 行情数据获取完成 ({time.time()-_t0:.1f}s)")
 
         if IS_RENDER:
             # 云端用 Plotly.js CDN 报告（完整的暗色主题 + 交互图表）
@@ -489,6 +495,7 @@ def api_single_analysis():
                 kline_data=kline_data, quote=quote, market=market,
                 fund_flow=fund_flow, announcements=announcements
             )
+        print(f"[ANALYZE] 报告生成完成 (总耗时 {time.time()-_t0:.1f}s)")
 
         overall = sentiment_result.get("overall_sentiment", {})
         summary = {

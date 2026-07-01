@@ -104,7 +104,7 @@ def get_stock_news(stock_code: str, days: int = DEFAULT_LOOKBACK_DAYS,
             f"&pageSize={max_news}&pageIndex=1"
             f"&token=&startTime=&endTime="
         )
-        resp = requests.get(url, headers=_get_headers(), timeout=15)
+        resp = requests.get(url, headers=_get_headers(), timeout=8)
         if resp.status_code == 200:
             data = resp.json()
             if data.get("code") == 1:
@@ -193,7 +193,7 @@ def get_kline_data(stock_code: str, period: str = "daily", days: int = 60) -> Op
             f"&end=20500101&lmt={days + 30}"
         )
 
-        resp = requests.get(url, headers=_get_headers(), timeout=15)
+        resp = requests.get(url, headers=_get_headers(), timeout=8)
         data = resp.json()
         klines = data.get("data", {}).get("klines", [])
 
@@ -285,8 +285,9 @@ def get_real_time_quote(stock_code: str) -> Optional[Dict]:
 # ======================================================================
 
 def get_market_index() -> Optional[Dict]:
-    """获取三大指数行情（纯 HTTP，无 akshare）"""
+    """获取三大指数行情（并发优化版）"""
     import requests
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     indices = {
         "上证指数": "1.000001",
@@ -295,32 +296,41 @@ def get_market_index() -> Optional[Dict]:
     }
 
     result = {}
-    for name, secid in indices.items():
+
+    def _fetch_one(name, secid):
         try:
             url = (
                 f"https://push2.eastmoney.com/api/qt/stock/get"
                 f"?secid={secid}"
                 f"&fields=f43,f44,f45,f46,f47,f48,f50,f51,f52,f55,f57,f58,f115,f117,f162,f167,f168,f169,f170,f171"
             )
-            resp = requests.get(url, headers=_get_headers(), timeout=10)
+            resp = requests.get(url, headers=_get_headers(), timeout=6)
             data = resp.json()
             d = data.get("data", {})
             if not d:
-                continue
-
+                return name, None
             price = d.get("f43", 0) / 100 if d.get("f43") else 0
             pre_close = d.get("f44", 0) / 100 if d.get("f44") else 0
             change = price - pre_close
             pct = change / pre_close * 100 if pre_close else 0
-
-            result[name] = {
+            return name, {
                 "price": round(float(price), 2),
                 "change": round(float(change), 2),
                 "pct_change": round(float(pct), 2),
             }
         except Exception:
-            continue
+            return name, None
 
+    # 并发请求 3 个指数（总耗时 ~ 最慢的 1 个，而非串行求和）
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {pool.submit(_fetch_one, n, s): n for n, s in indices.items()}
+        for future in as_completed(futures, timeout=10):
+            try:
+                name, data = future.result()
+                if data:
+                    result[name] = data
+            except Exception:
+                pass
     return result if result else None
 
 

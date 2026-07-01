@@ -89,8 +89,10 @@ async function runAnalysis() {
         } else { return showToast("未找到该股票"); }
     }
 
-    showLoading();
+    showLoading("正在分析，请稍候（云端首次分析约需30-60秒）...");
     try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 180000); // 3分钟超时
         const resp = await fetch("/api/single_analysis", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
@@ -99,8 +101,10 @@ async function runAnalysis() {
                 name: selectedName,
                 days: parseInt(document.getElementById("lookback-days").value),
                 max_news: parseInt(document.getElementById("max-news").value)
-            })
+            }),
+            signal: controller.signal
         });
+        clearTimeout(timeoutId);
         const data = await resp.json();
         if (data.success) {
             renderResult(data.data);

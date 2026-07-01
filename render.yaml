@@ -7,7 +7,7 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements-cloud.txt
-    startCommand: gunicorn mobile_app:app --bind 0.0.0.0:$PORT --timeout 120 --workers 1 --threads 2 --max-requests 50 --max-requests-jitter 10 --worker-tmp-dir /dev/shm
+    startCommand: gunicorn mobile_app:app --bind 0.0.0.0:$PORT --timeout 180 --workers 1 --threads 2 --max-requests 50 --max-requests-jitter 10 --worker-tmp-dir /dev/shm
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
