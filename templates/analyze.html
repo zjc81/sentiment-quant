@@ -131,8 +131,24 @@ function renderResult(d) {
             <div style="font-size:20px;color:${color};margin-top:4px;">${d.label}</div>
         </div>
         <div class="info-row"><span>股票</span><span>${d.stock_code} ${d.stock_name}</span></div>
-        <div class="info-row"><span>当前价格</span><span>${d.price}</span></div>
-        <div class="info-row"><span>涨跌幅</span><span style="color:${(d.pct_change||0)>=0?'var(--color-up)':'var(--color-down)'}">${d.pct_change}%</span></div>
+        ${(()=>{
+            const hasPrice = d.price !== '--' && d.price !== null && d.price !== undefined && d.price !== '';
+            const hasPct   = d.pct_change !== '--' && d.pct_change !== null && d.pct_change !== undefined && d.pct_change !== '';
+            const priceStr = hasPrice ? parseFloat(d.price).toFixed(2) : '--';
+            const pctVal   = hasPct   ? parseFloat(d.pct_change) : null;
+            const pctStr   = pctVal !== null ? (pctVal >= 0 ? '+' : '') + pctVal.toFixed(2) + '%' : '--%';
+            const upColor  = 'var(--color-up)';
+            const dnColor  = 'var(--color-down)';
+            const pctColor = pctVal === null ? 'var(--text-secondary)' : (pctVal >= 0 ? upColor : dnColor);
+            return \`
+        <div class="info-row">
+            <span>当前价格 / 涨跌幅</span>
+            <span style="display:flex;align-items:baseline;gap:10px;">
+                <strong style="font-size:17px;color:\${pctColor}">\${priceStr}</strong>
+                <span style="font-size:14px;color:\${pctColor};font-weight:600;">\${pctStr}</span>
+            </span>
+        </div>\`;
+        })()}
         <div class="info-row"><span>新闻总数</span><span>${d.news_count}条</span></div>
         <div class="info-row"><span>正面/负面/中性</span><span style="color:var(--color-up)">${d.positive_count}</span> / <span style="color:var(--color-down)">${d.negative_count}</span> / ${d.neutral_count}</div>
         <div class="info-row"><span>正面占比</span><span>${(d.positive_ratio*100).toFixed(0)}%</span></div>
