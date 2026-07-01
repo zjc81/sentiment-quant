@@ -916,3 +916,632 @@ def generate_report(
     output_path.write_text(full_html, encoding="utf-8")
 
     return str(output_path)
+
+
+# ======================================================================
+# 云端回测报告生成器 (纯 Python + Plotly.js CDN)
+# ======================================================================
+
+def generate_backtest_report(
+    stock_code: str,
+    stock_name: str,
+    results: dict,           # {strategy_key: result_dict} from cloud_backtest
+    capital: float = 100000,
+    lookback_days: int = 7,
+    kline_data: list = None,
+    sentiment_result: dict = None,
+    output_path: Path = None,
+) -> str:
+    """
+    生成完整的云端 HTML 回测报告（零外部依赖，Plotly.js CDN 渲染）
+
+    Args:
+        stock_code: 股票代码
+        stock_name: 股票名称
+        results: compare_strategies_cloud() 返回的完整结果字典
+        capital: 初始资金
+        lookback_days: 回溯天数
+        kline_data: K线数据（用于价格走势图）
+        sentiment_result: 情感分析结果
+        output_path: 输出路径，默认自动生成
+
+    Returns:
+        生成的HTML文件路径
+    """
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    _NL = "\n"
+
+    # ---- 策略数据整理 ----
+    strategy_order = ["buy_hold", "sentiment_only", "sentiment_ma",
+                      "rsi_mean_reversion", "bollinger_breakout", "momentum"]
+    strat_names = {
+        "buy_hold": "买入持有", "sentiment_only": "纯情绪信号",
+        "sentiment_ma": "情绪+均线", "rsi_mean_reversion": "RSI均值回归",
+        "bollinger_breakout": "布林带突破", "momentum": "动量策略",
+    }
+
+    valid_results = {}
+    for key in strategy_order:
+        if key in results and "error" not in results[key] and results[key].get("total_return") is not None:
+            valid_results[key] = results[key]
+
+    if not valid_results:
+        raise ValueError("无有效回测结果可生成报告")
+
+    # 找最佳策略
+    best_key = max(valid_results.keys(), key=lambda k: valid_results[k].get("total_return", -999))
+    best_res = valid_results[best_key]
+
+    # ---- 图表1：权益曲线对比 ----
+    equity_chart_html = ""
+    if len(valid_results) >= 1:
+        uid_eq = f"eq_{_uid()}"
+        eq_traces = []
+        colors_map = {"buy_hold": "#888888", "sentiment_only": "#00ff88",
+                      "sentiment_ma": "#4488ff", "rsi_mean_reversion": "#ff8844",
+                      "bollinger_breakout": "#ff44cc", "momentum": "#ffcc44"}
+
+        # 收集所有日期（取并集）
+        all_dates_set = set()
+        eq_data = {}  # key -> [(date, value), ...]
+        for key, res in valid_results.items():
+            ec = res.get("equity_curve", [])
+            if ec:
+                eq_data[key] = [(e["date"], e["value"]) for e in ec]
+                for e in ec:
+                    all_dates_set.add(e["date"])
+
+        all_dates = sorted(all_dates_set)
+
+        if all_dates and eq_data:
+            for key in strategy_order:
+                if key not in eq_data:
+                    continue
+                val_map = dict(eq_data[key])
+                # 对齐到所有日期（前值填充）
+                aligned_vals = []
+                last_v = None
+                for d in all_dates:
+                    if d in val_map:
+                        last_v = val_map[d]
+                    aligned_vals.append(last_v if last_v else capital)
+                eq_traces.append({
+                    "type": "scatter", "x": all_dates, "y": aligned_vals,
+                    "mode": "lines", "name": strat_names.get(key, key),
+                    "line": {"color": colors_map.get(key, "#00ff88"), "width": 2 if key == best_key else 1.5},
+                    "opacity": 1.0 if key == best_key else 0.7,
+                })
+
+            if eq_traces:
+                eq_layout = {
+                    "template": _dark_template(),
+                    "height": 450,
+                    "showlegend": True,
+                    "legend": {"x": 0.01, "y": 0.99, "bgcolor": "rgba(26,26,46,0.85)", "font": {"size": 11}},
+                    "hovermode": "x unified",
+                    "margin": {"l": 60, "r": 30, "t": 40, "b": 30},
+                    "xaxis": {"title": "日期", "gridcolor": "#2a2a4a"},
+                    "yaxis": {"title": "账户净值 (元)", "gridcolor": "#2a2a4a"},
+                    "shapes": [
+                        {"type": "line", "x0": all_dates[0], "x1": all_dates[-1] if all_dates else all_dates[0],
+                         "xref": "x", "y0": capital, "y1": capital, "yref": "y",
+                         "line": {"color": "#666666", "dash": "dot", "width": 1}},
+                    ],
+                    "annotations": [
+                        {"x": 1, "xanchor": "right", "xref": "x",
+                         "y": capital * 1.02, "yref": "y", "yanchor": "bottom",
+                         "text": f"初始资金: {capital:,.0f}元", "showarrow": False,
+                         "font": {"size": 11, "color": "#888"},
+                         "bgcolor": "rgba(22,33,62,0.8)"},
+                    ],
+                }
+                equity_chart_html = _plotly_div(uid_eq, eq_traces, eq_layout)
+
+    # ---- 图表2：回撤对比 ----
+    drawdown_chart_html = ""
+    if len(valid_results) >= 1:
+        uid_dd = f"dd_{_uid()}"
+        dd_traces = []
+        for key in strategy_order:
+            if key not in valid_results:
+                continue
+            ec = valid_results[key].get("equity_curve", [])
+            if not ec:
+                continue
+            values = [e["value"] for e in ec]
+            dates = [e["date"] for e in ec]
+            # 计算回撤
+            dd_values = []
+            peak = 0
+            for v in values:
+                if v > peak:
+                    peak = v
+                dd = (peak - v) / peak * 100 if peak > 0 else 0
+                dd_values.append(round(dd, 2))
+            dd_traces.append({
+                "type": "scatter", "x": dates, "y": dd_values,
+                "mode": "lines", "name": strat_names.get(key, key),
+                "line": {"color": colors_map.get(key, "#00ff88"), "width": 1.5},
+                "fill": "tozeroy" if key == best_key else "none",
+                "fillcolor": f"rgba({_hex_to_rgb(colors_map.get(best_key, '#00ff88'))},0.1)" if key == best_key else None,
+            })
+        if dd_traces:
+            dd_layout = {
+                "template": _dark_template(),
+                "height": 350,
+                "showlegend": True,
+                "legend": {"x": 0.01, "y": 0.99, "bgcolor": "rgba(26,26,46,0.85)", "font": {"size": 10}},
+                "hovermode": "x unified",
+                "margin": {"l": 50, "r": 30, "t": 30, "b": 30},
+                "xaxis": {"title": "日期", "gridcolor": "#2a2a4a"},
+                "yaxis": {"title": "回撤 (%)", "gridcolor": "#2a2a4a"},
+            }
+            drawdown_chart_html = _plotly_div(uid_dd, dd_traces, dd_layout)
+
+    # ---- 图表3：收益/风险散点图 ----
+    scatter_chart_html = ""
+    if len(valid_results) >= 2:
+        uid_sc = f"sc_{_uid()}"
+        sc_traces = []
+        sc_annotations = []
+        for idx, (key, res) in enumerate(valid_results.items()):
+            ret = res.get("total_return", 0)
+            dd = res.get("max_drawdown", 0)
+            name = strat_names.get(key, key)
+            is_best = (key == best_key)
+            sc_traces.append({
+                "type": "scatter", "x": [dd], "y": [ret],
+                "mode": "markers+text", "name": name,
+                "marker": {"size": 18 if is_best else 14,
+                          "color": colors_map.get(key, "#00ff88"),
+                          "symbol": "star" if is_best else "circle",
+                          "line": {"width": 2 if is_best else 1, "color": "#fff"}},
+                "text": [name],
+                "textposition": "top center",
+                "textfont": {"size": 11, "color": "#ccc", "weight": "bold" if is_best else "normal"},
+            })
+        if sc_traces:
+            sc_layout = {
+                "template": _dark_template(),
+                "height": 380,
+                "showlegend": False,
+                "hovermode": "closest",
+                "margin": {"l": 55, "r": 30, "t": 30, "b": 40},
+                "xaxis": {"title": "最大回撤 (%)", "gridcolor": "#2a2a4a"},
+                "yaxis": {"title": "总收益率 (%)", "gridcolor": "#2a2a4a"},
+                "shapes": [
+                    {"type": "line", "x0": 0, "x1": 100, "xref": "x", "y0": 0, "y1": 0, "yref": "y",
+                     "line": {"color": "#555", "width": 1}},
+                ],
+                "annotations": [
+                    {"x": 5, "xref": "x", "y": 0.95, "yref": "paper",
+                     "text": "左上角最优 (低回撤 + 高收益)",
+                     "showarrow": False, "font": {"size": 10, "color": "#888"},
+                     "bgcolor": "rgba(22,33,62,0.75)"},
+                ],
+            }
+            scatter_chart_html = _plotly_div(uid_sc, sc_traces, sc_layout)
+
+    # ---- 图表4：指标雷达图 ----
+    radar_chart_html = ""
+    if len(valid_results) >= 3:
+        uid_rad = f"rad_{_uid()}"
+        rad_categories = ["收益率", "夏普比率", "胜率", "(反向)最大回撤"]
+        rad_traces = []
+        for key in [best_key] + [k for k in valid_results if k != best_key][:2]:
+            res = valid_results[key]
+            # 归一化到 0-100
+            ret_norm = max(0, min(100, (res.get("total_return", 0) + 50)))  # -50%~+150% → 0~200 clamp
+            sharpe_norm = max(0, min(100, (res.get("sharpe_ratio", 0) + 3) * 16))  # -3~+3 → 0~100 approx
+            win_norm = max(0, min(100, res.get("win_rate", 0)))
+            dd_norm = max(0, min(100, 100 - res.get("max_drawdown", 0)))
+            rvals = [ret_norm, sharpe_norm, win_norm, dd_norm]
+            rad_traces.append({
+                "type": "scatterpolar",
+                "r": rvals + [rvals[0]],
+                "theta": rad_categories + [rad_categories[0]],
+                "fill": "toself",
+                "name": strat_names.get(key, key),
+                "line": {"color": colors_map.get(key, "#00ff88"),
+                         "width": 3 if key == best_key else 1.5},
+                "fillcolor": f"rgba({_hex_to_rgb(colors_map.get(key, '#00ff88'))},{"0.25" if key == best_key else "0.08"})",
+            })
+
+        if rad_traces:
+            rad_layout = {
+                "template": _dark_template(),
+                "polar": {"radialaxis": {"visible": True, "range": [0, 100], "color": "#888"},
+                         "bgcolor": "#16213e"},
+                "height": 400,
+                "showlegend": True,
+                "legend": {"x": 0.01, "y": 0.99, "bgcolor": "rgba(26,26,46,0.8)", "font": {"size": 10}},
+                "margin": {"l": 40, "r": 40, "t": 30, "b": 30},
+            }
+            radar_chart_html = _plotly_div(uid_rad, rad_traces, rad_layout)
+
+    # ---- 策略详情表格行 ----
+    def _fmt_pct(v, default="--"):
+        try:
+            fv = float(v)
+            return f"{fv:+.2f}%"
+        except (TypeError, ValueError):
+            return default
+
+    def _fmt_num(v, default="--"):
+        try:
+            return f"{float(v):,.2f}"
+        except (TypeError, ValueError):
+            return default
+
+    table_rows = []
+    for key in strategy_order:
+        if key not in valid_results:
+            continue
+        res = valid_results[key]
+        is_best = (key == best_key)
+        tr = res.get("total_return", 0)
+        clr = "#00ff88" if tr > 0 else "#ff4444"
+        bg_highlight = "background:rgba(0,255,136,0.05);border-left:3px solid #00ff88;" if is_best else ""
+
+        pf = res.get("profit_factor", 0)
+        pf_str = f"{pf:.2f}" if pf != float("inf") else "+∞"
+
+        row = f"""<tr style="{bg_highlight}">
+            <td style="font-weight:{'bold' if is_best else 'normal'}">
+                {'★ ' if is_best else ''}{strat_names.get(key, key)}
+            </td>
+            <td style="color:{clr};font-weight:bold">{_fmt_pct(tr)}</td>
+            <td>{_fmt_pct(res.get('annual_return', 0))}</td>
+            <td style="color:#ff4444">{_fmt_pct(res.get('max_drawdown', 0))}</td>
+            <td>{_fmt_num(res.get('sharpe_ratio', 0))}</td>
+            <td>{res.get('win_rate', 0):.1f}%</td>
+            <td>{pf_str}</td>
+            <td>{int(res.get('total_trades', 0))}</td>
+            <td style="font-weight:bold">¥{_fmt_num(res.get('final_value', capital))}</td>
+        </tr>"""
+        table_rows.append(row)
+
+    # ---- 最佳策略交易记录 ----
+    best_trades = best_res.get("trades", [])
+    trade_rows = ""
+    for t in best_trades[:20]:  # 最多显示20条
+        action = t.get("action", "")
+        action_color = "#00ff88" if action == "buy" else "#ff4444"
+        action_label = "买入" if action == "buy" else "卖出"
+        reason = t.get("reason", "")
+        trade_rows += f"""<tr>
+            <td>{t.get('date', '')}</td>
+            <td style="color:{action_color};font-weight:bold">{action_label}</td>
+            <td>¥{t.get('price', 0):,.2f}</td>
+            <td>{t.get('shares', 0)}</td>
+            <td>¥{t.get('value', 0):,.2f}</td>
+            <td>¥{t.get('commission', 0):,.2f}</td>
+            <td style="font-size:12px;color:#aaa;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{reason}</td>
+        </tr>"""
+
+    # ---- 价格走势图（如果K线数据可用） ----
+    price_chart_html = ""
+    if kline_data and len(kline_data) >= 3:
+        uid_pk = f"pk_{_uid()}"
+        dates_p = [k.get("date", "")[-5:] if len(k.get("date", "")) >= 10 else k.get("date", "") for k in kline_data]
+        closes_p = [k.get("close", 0) for k in kline_data]
+
+        # 计算均线
+        ma5_p = _sma(closes_p, 5)
+        ma20_p = _sma(closes_p, 20)
+
+        pk_traces = [
+            {"type": "candlestick", "x": dates_p,
+             "open": [k.get("open", 0) for k in kline_data],
+             "high": [k.get("high", 0) for k in kline_data],
+             "low": [k.get("low", 0) for k in kline_data],
+             "close": closes_p,
+             "name": "K线",
+             "increasing": {"line": {"color": "#00ff88", "width": 1}, "fillcolor": "rgba(0,255,136,0.35)"},
+             "decreasing": {"line": {"color": "#ff4444", "width": 1}, "fillcolor": "rgba(255,68,68,0.35)"},
+             "xaxis": "x", "yaxis": "y"},
+            {"type": "scatter", "x": dates_p, "y": ma5_p, "mode": "lines",
+             "name": "MA5", "line": {"color": "#4488ff", "width": 1}, "xaxis": "x", "yaxis": "y"},
+            {"type": "scatter", "x": dates_p, "y": ma20_p, "mode": "lines",
+             "name": "MA20", "line": {"color": "#ff8844", "width": 1}, "xaxis": "x", "yaxis": "y"},
+        ]
+
+        # 叠加买卖信号点（仅最佳策略）
+        if best_trades:
+            buy_dates, buy_prices = [], []
+            sell_dates, sell_prices = [], []
+            for t in best_trades:
+                td = t.get("date", "")
+                td_short = td[-5:] if len(td) >= 10 else td
+                tp = t.get("price", 0)
+                if t.get("action") == "buy":
+                    buy_dates.append(td_short)
+                    buy_prices.append(tp)
+                elif t.get("action") == "sell":
+                    sell_dates.append(td_short)
+                    sell_prices.append(tp)
+            if buy_dates:
+                pk_traces.append({"type": "scatter", "x": buy_dates, "y": buy_prices,
+                                 "mode": "markers", "name": "买入信号",
+                                 "marker": {"size": 12, "color": "#00ff88", "symbol": "triangle-up",
+                                           "line": {"width": 1.5, "color": "#fff"}},
+                                 "xaxis": "x", "yaxis": "y"})
+            if sell_dates:
+                pk_traces.append({"type": "scatter", "x": sell_dates, "y": sell_prices,
+                                 "mode": "markers", "name": "卖出信号",
+                                 "marker": {"size": 12, "color": "#ff4444", "symbol": "triangle-down",
+                                           "line": {"width": 1.5, "color": "#fff"}},
+                                 "xaxis": "x", "yaxis": "y"})
+
+        pk_layout = {
+            "template": _dark_template(),
+            "height": 500,
+            "showlegend": True,
+            "legend": {"x": 0.01, "y": 0.99, "bgcolor": "rgba(26,26,46,0.8)", "font": {"size": 10}},
+            "hovermode": "x unified",
+            "margin": {"l": 30, "r": 30, "t": 30, "b": 30},
+            "xaxis": {"rangeslider": {"visible": False}},
+            "yaxis": {"title": "价格 (元)", "gridcolor": "#2a2a4a"},
+        }
+        price_chart_html = _plotly_div(uid_pk, pk_traces, pk_layout)
+
+    # ---- 情绪信号叠加图 ----
+    sentiment_overlay_html = ""
+    if sentiment_result and kline_data and len(kline_data) >= 3:
+        trend_data = sentiment_result.get("time_analysis", {}).get("trend", [])
+        if trend_data:
+            uid_so = f"so_{_uid()}"
+            dates_so = [k.get("date", "")[-5:] if len(k.get("date", "")) >= 10 else k.get("date", "") for k in kline_data]
+
+            date_score_map = {}
+            for tr in trend_data:
+                ds = tr.get("date", "")
+                sc = tr.get("score", 0.5)
+                if ds:
+                    date_score_map[ds] = sc * 100
+
+            aligned_scores_so = [date_score_map.get(k.get("date", ""), None) for k in kline_data]
+            so_traces = [
+                {"type": "scatter", "x": dates_so, "y": aligned_scores_so,
+                 "mode": "lines+markers", "name": "情绪得分",
+                 "line": {"color": "#ff8844", "width": 2},
+                 "marker": {"size": 6, "color": "#ff8844"},
+                 "fill": "tozeroy", "fillcolor": "rgba(255,136,68,0.12)"}
+            ]
+            so_layout = {
+                "template": _dark_template(),
+                "height": 250,
+                "showlegend": True,
+                "legend": {"font": {"size": 10}},
+                "margin": {"l": 30, "r": 30, "t": 20, "b": 30},
+                "yaxis": {"title": "情绪分", "range": [0, 100], "gridcolor": "#2a2a4a"},
+                "shapes": [
+                    {"type": "line", "x0": 0, "x1": 1, "xref": "x domain",
+                     "y0": 65, "y1": 65, "yref": "y",
+                     "line": {"color": "#88cc44", "dash": "dash", "width": 1}},
+                    {"type": "line", "x0": 0, "x1": 1, "xref": "x domain",
+                     "y0": 35, "y1": 35, "yref": "y",
+                     "line": {"color": "#ff4444", "dash": "dash", "width": 1}},
+                ]
+            }
+            sentiment_overlay_html = _plotly_div(uid_so, so_traces, so_layout)
+
+    # ---- 构建完整 HTML ----
+    full_html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📊 回测报告 - {stock_name}({stock_code})</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            background: linear-gradient(135deg, #0f0c29, #16213e, #1a1a2e);
+            color: #e0e0e0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            min-height: 100vh;
+            padding: 15px;
+        }}
+        .container {{ max-width: 1400px; margin: 0 auto; }}
+
+        /* 头部 */
+        .report-header {{
+            text-align: center; padding: 28px 20px;
+            background: linear-gradient(135deg, rgba(26,26,46,0.92), rgba(22,33,62,0.92));
+            border-radius: 18px; margin-bottom: 20px;
+            border: 1px solid rgba(255,255,255,0.06); backdrop-filter: blur(10px);
+        }}
+        .report-header h1 {{
+            font-size: 27px;
+            background: linear-gradient(90deg, #00ff88, #4488ff, #ff8844);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }}
+        .report-header .subtitle {{ color: #999; font-size: 13px; margin-top: 6px; }}
+
+        /* 参数栏 */
+        .params-bar {{
+            display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;
+            background: rgba(26,26,46,0.7); border-radius: 12px; padding: 12px 20px;
+            margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.04);
+        }}
+        .param-item {{ font-size: 13px; color: #aaa; }}
+        .param-item b {{ color: #e0e0e0; }}
+        .param-highlight {{ color: #00ff88; font-weight:bold; }}
+
+        /* 最佳策略卡片 */
+        .best-card {{
+            background: linear-gradient(135deg, rgba(0,255,136,0.08), rgba(68,136,255,0.05));
+            border-radius: 15px; padding: 20px 24px; margin-bottom: 20px;
+            border: 1px solid rgba(0,255,136,0.15); text-align:center;
+        }}
+        .best-label {{ font-size: 14px; color: #00ff88; margin-bottom: 4px; }}
+        .best-name {{ font-size: 26px; font-weight: bold; color: #fff; }}
+        .best-return {{ font-size: 36px; font-weight: bold; margin-top: 6px; }}
+        .best-return.pos {{ color: #00ff88; }}
+        .best-return.neg {{ color: #ff4444; }}
+        .best-metrics {{ display:flex; gap:20px; justify-content:center; margin-top:12px; flex-wrap:wrap; }}
+        .bm-item {{ text-align: center; }}
+        .bm-val {{ font-size: 17px; font-weight: bold; color: #e0e0e0; }}
+        .bm-lbl {{ font-size: 11px; color: #888; margin-top: 2px; }}
+
+        /* 表格 */
+        .table-card {{
+            background: rgba(26,26,46,0.8); border-radius: 15px; padding: 18px; margin-bottom: 20px;
+            border: 1px solid rgba(255,255,255,0.04); overflow-x:auto;
+        }}
+        .table-title {{ font-size: 16px; font-weight: bold; color: #ccc; margin-bottom: 12px; }}
+        .bt-table {{
+            width: 100%; border-collapse: collapse; font-size: 13px;
+        }}
+        .bt-table th {{
+            background: rgba(0,255,136,0.08); color: #00ff88; padding: 10px 8px;
+            text-align: center; font-size: 12px; white-space: nowrap; border-bottom: 1px solid rgba(255,255,255,0.06);
+        }}
+        .bt-table td {{
+            padding: 9px 8px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.03);
+            white-space: nowrap; font-size: 13px;
+        }}
+        .bt-table tr:hover {{ background: rgba(255,255,255,0.03); }}
+
+        /* 图表 */
+        .chart-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }}
+        .chart-card {{
+            background: rgba(26,26,46,0.8); border-radius: 15px; padding: 18px;
+            border: 1px solid rgba(255,255,255,0.04); overflow: hidden;
+        }}
+        .chart-card > div {{ width: 100% !important; }}
+        .chart-card.full-width {{ grid-column: 1 / -1; }}
+        .chart-title {{ font-size: 15px; font-weight: bold; color: #ccc; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.05); }}
+
+        /* 交易记录 */
+        .trade-table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
+        .trade-table th {{
+            background: rgba(68,136,255,0.08); color: #4488ff; padding: 8px 6px;
+            text-align: center; font-size: 11px; border-bottom: 1px solid rgba(255,255,255,0.06);
+        }}
+        .trade-table td {{
+            padding: 7px 6px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.03);
+            font-size: 12px;
+        }}
+        .trade-table tr:hover {{ background: rgba(255,255,255,0.03); }}
+
+        /* 结论 */
+        .conclusion-box {{
+            background: linear-gradient(135deg, rgba(0,255,136,0.05), rgba(68,136,255,0.05));
+            border-radius: 12px; padding: 16px 20px; margin-bottom: 20px;
+            border: 1px solid rgba(0,255,136,0.1); font-size: 14px; line-height: 1.8; color: #bbb;
+        }}
+        .conclusion-box strong {{ color: #00ff88; }}
+
+        /* 页脚 */
+        .footer {{ text-align: center; color: #555; font-size: 11px; padding: 15px; margin-top: 10px; }}
+
+        @media (max-width: 768px) {{
+            .chart-grid {{ grid-template-columns: 1fr; }}
+            .params-bar {{ flex-direction: column; gap: 8px; align-items: center; }}
+            .bt-table {{ font-size: 11px; }}
+            .bt-table th, .bt-table td {{ padding: 6px 4px; }}
+            .best-metrics {{ flex-direction: column; gap: 8px; }}
+        }}
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <!-- 头部 -->
+    <div class="report-header">
+        <h1>📊 策略回测报告</h1>
+        <div class="subtitle">{stock_name} ({stock_code}) | 生成时间: {now_str}</div>
+    </div>
+
+    <!-- 参数 -->
+    <div class="params-bar">
+        <span class="param-item">初始资金: <b>¥{capital:,.0f}</b></span>
+        <span class="param-item">回溯周期: <b>近{lookback_days}天</b></span>
+        <span class="param-item">有效策略: <b>{len(valid_results)}个</b></span>
+        <span class="param-item">K线数量: <b>{len(kline_data) if kline_data else 0}条</b></span>
+    </div>
+
+    <!-- 最佳策略 -->
+    <div class="best-card">
+        <div class="best-label">🏆 最佳策略</div>
+        <div class="best-name">{strat_names.get(best_key, best_key)}</div>
+        <div class="best-return {'pos' if best_res.get('total_return',0)>=0 else 'neg'}">
+            {best_res.get('total_return',0):+.2f}%
+        </div>
+        <div class="best-metrics">
+            <div class="bm-item"><div class="bm-val">¥{best_res.get('final_value',capital):,.0f}</div><div class="bm-lbl">最终净值</div></div>
+            <div class="bm-item"><div class="bm-val">{best_res.get('annual_return',0):+.2f}%</div><div class="bm-lbl">年化收益</div></div>
+            <div class="bm-item"><div class="bm-val" style="color:#ff4444">{best_res.get('max_drawdown',0):.2f}%</div><div class="bm-lbl">最大回撤</div></div>
+            <div class="bm-item"><div class="bm-val">{best_res.get('sharpe_ratio',0):.2f}</div><div class="bm-lbl">夏普比率</div></div>
+            <div class="bm-item"><div class="bm-val">{best_res.get('win_rate',0):.1f}%</div><div class="bm-lbl">胜率</div></div>
+            <div class="bm-item"><div class="bm-val">{int(best_res.get('total_trades',0))}</div><div class="bm-lbl">交易次数</div></div>
+        </div>
+    </div>
+
+    <!-- 策略对比表 -->
+    <div class="table-card">
+        <div class="table-title">📋 六策略详细对比</div>
+        <table class="bt-table">
+            <thead><tr>
+                <th>策略名称</th><th>总收益率</th><th>年化收益</th><th>最大回撤</th>
+                <th>夏普比率</th><th>胜率</th><th>盈亏比</th><th>交易次数</th><th>最终净值</th>
+            </tr></thead>
+            <tbody>{_NL.join(table_rows)}</tbody>
+        </table>
+    </div>
+
+    <!-- 权益曲线 -->
+    {f'<div class="chart-card full-width"><div class="chart-title">📈 各策略权益曲线对比</div>{equity_chart_html}</div>' if equity_chart_html else ''}
+
+    <!-- 价格走势 + 信号 -->
+    {f'<div class="chart-card full-width"><div class="chart-title">📉 价格走势与【{strat_names.get(best_key,best_key)}】交易信号</div>{price_chart_html}</div>' if price_chart_html else ''}
+    {f'<div class="chart-card full-width"><div class="chart-title">💬 情绪信号时间序列</div>{sentiment_overlay_html}</div>' if sentiment_overlay_html else ''}
+
+    <!-- 回撤对比 -->
+    {f'<div class="chart-card full-width"><div class="chart-title">📉 各策略回撤曲线</div>{drawdown_chart_html}</div>' if drawdown_chart_html else ''}
+
+    <!-- 收益/风险散点 + 雷达 -->
+    {f'<div class="chart-grid">' + _NL.join([
+        f'<div class="chart-card"><div class="chart-title">🎯 收益 vs 风险分布</div>{scatter_chart_html}</div>',
+        f'<div class="chart-card"><div class="chart-title">🔸 核心指标雷达</div>{radar_chart_html}</div>'
+    ]) + '</div>' if scatter_chart_html or radar_chart_html else ''}
+
+    <!-- 交易记录 -->
+    {f'''<div class="table-card">
+        <div class="table-title">📝 【{strat_names.get(best_key,best_key)}】交易记录（最近{min(len(best_trades),20)}条）</div>
+        <table class="trade-table">
+            <thead><tr><th>日期</th><th>方向</th><th>价格</th><th>股数</th><th>金额</th><th>手续费</th><th>原因</th></tr></thead>
+            <tbody>{trade_rows}</tbody>
+        </table>
+    </div>''' if trade_rows else ''}
+
+    <!-- 结论 -->
+    <div class="conclusion-box">
+        <strong>回测结论：</strong>
+        在近{lookback_days}天的回测周期内，
+        <strong>{strat_names.get(best_key,best_key)}</strong>以<strong>{best_res.get('total_return',0):+.2f}%</strong>的收益率表现最佳，
+        最大回撤为<strong style="color:#ff4444">{best_res.get('max_drawdown',0):.2f}%</strong>，
+        夏普比率为<strong>{best_res.get('sharpe_ratio',0):.2f}</strong>。
+        共执行了<strong>{int(best_res.get('total_trades',0))}</strong>笔交易，胜率达<strong>{best_res.get('win_rate',0):.1f}%</strong>。
+        {"⚠️ 注意：回测结果不代表未来表现，仅供参考。" if lookback_days < 30 else "⚠️ 注意：历史回测不代表未来表现，市场有风险。"}
+    </div>
+
+    <div class="footer">
+        SentimentQuant 回测引擎 · 云端版 (Render) · 纯 Python 零依赖计算
+    </div>
+</div>
+</body>
+</html>"""
+
+    # 保存文件
+    if output_path is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"回测报告_{stock_code}_{stock_name}_{timestamp}.html"
+        output_path = REPORT_DIR / filename
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(full_html, encoding="utf-8")
+
+    return str(output_path)

@@ -507,7 +507,7 @@ _warmup()
 # 云端报告生成器（纯 Python + Plotly.js CDN，零外部依赖）
 # =============================================================================
 
-from core.cloud_report import generate_report
+from core.cloud_report import generate_report, generate_backtest_report
 
 
 # =============================================================================
@@ -780,7 +780,7 @@ def api_backtest():
         summary = []
 
         if IS_RENDER:
-            # ===== 云端：使用零依赖纯Python回测引擎 =====
+            # ===== 云端：使用零依赖纯Python回测引擎 + 生成HTML报告 =====
             from core.cloud_backtest import compare_strategies_cloud as cloud_bt
             results = cloud_bt(
                 stock_code=stock_code, stock_name=stock_name,
@@ -801,7 +801,19 @@ def api_backtest():
                     "total_trades": res.get("total_trades", 0),
                     "final_value": res.get("final_value", capital),
                 })
-            report_url = None
+            # 生成云端回测报告（Plotly.js CDN 交互式图表）
+            try:
+                bt_report_path = generate_backtest_report(
+                    stock_code=stock_code, stock_name=stock_name,
+                    results=results, capital=capital,
+                    lookback_days=lookback, kline_data=kline_data or [],
+                    sentiment_result=sentiment_result or {},
+                )
+                report_url = f"/reports/view/{Path(bt_report_path).name}"
+                print(f"[BT] 云端回测报告已生成: {bt_report_path}")
+            except Exception as e:
+                print(f"[BT] 云端回测报告生成失败: {e}")
+                report_url = None
 
         else:
             # ===== 桌面版：使用完整pandas回测引擎 + Plotly报告 =====
