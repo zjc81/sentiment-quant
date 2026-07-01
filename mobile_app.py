@@ -286,13 +286,21 @@ def _get_report_dir():
 
 @functools.lru_cache(maxsize=1)
 def _get_sentiment_analyzer():
-    from core.sentiment import SentimentAnalyzer
-    return SentimentAnalyzer()
+    try:
+        from core.sentiment import SentimentAnalyzer
+        return SentimentAnalyzer()
+    except Exception as e:
+        print(f"[WARN] SentimentAnalyzer init failed: {e}")
+        return None
 
 @functools.lru_cache(maxsize=1)
 def _get_report_generator():
-    from visualization.report import ReportGenerator
-    return ReportGenerator()
+    try:
+        from visualization.report import ReportGenerator
+        return ReportGenerator()
+    except Exception as e:
+        print(f"[WARN] ReportGenerator init failed: {e}")
+        return None
 
 def _cleanup():
     gc.collect()
@@ -304,6 +312,48 @@ def _init_dirs():
         pass
 
 _init_dirs()
+
+# =============================================================================
+# 云端启动预热（尽早发现依赖问题）
+# =============================================================================
+
+def _warmup():
+    """预热：验证所有关键模块可正常加载"""
+    print("[WARMUP] Starting dependency checks...")
+    errors = []
+    # 1. 测试 config
+    try:
+        from config import POSITIVE_KEYWORDS, NEGATIVE_KEYWORDS
+        print(f"[WARMUP] config OK ({len(POSITIVE_KEYWORDS)} pos, {len(NEGATIVE_KEYWORDS)} neg keywords)")
+    except Exception as e:
+        errors.append(f"config: {e}")
+    # 2. 测试 sentiment（含 snownlp）
+    try:
+        analyzer = _get_sentiment_analyzer()
+        if analyzer:
+            test_result = analyzer.analyze([{"title": "测试利好", "content": "业绩增长", "source": "测试", "publish_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "date": datetime.now().strftime("%Y-%m-%d")}])
+            score = test_result.get("overall_sentiment", {}).get("score", -1)
+            print(f"[WARMUP] sentiment OK (test score={score})")
+        else:
+            errors.append("sentiment: analyzer is None after init")
+    except Exception as e:
+        import traceback
+        errors.append(f"sentiment: {e}\n{traceback.format_exc()}")
+    # 3. 测试 cache
+    try:
+        from utils.cache import FileCache
+        print("[WARMUP] cache OK")
+    except Exception as e:
+        errors.append(f"cache: {e}")
+
+    if errors:
+        print("[WARMUP] ERRORS:")
+        for err in errors:
+            print(f"  [ERR] {err}")
+    else:
+        print("[WARMUP] All checks passed! ✓")
+
+_warmup()
 
 
 # =============================================================================
@@ -405,6 +455,8 @@ def api_single_analysis():
             return jsonify({"success": False, "error": f"未找到 {stock_code} 的相关新闻"})
 
         analyzer = _get_sentiment_analyzer()
+        if analyzer is None:
+            return jsonify({"success": False, "error": "情感分析引擎初始化失败，请稍后重试"})
         sentiment_result = analyzer.analyze(news_list)
         del news_list
         _cleanup()
@@ -473,6 +525,8 @@ def api_batch_analysis():
 
         f = _get_fetchers()
         analyzer = _get_sentiment_analyzer()
+        if analyzer is None:
+            return jsonify({"success": False, "error": "情感分析引擎初始化失败，请稍后重试"})
         results = []
         for code in codes:
             try:
@@ -566,6 +620,21 @@ def api_reports():
 @app.route("/reports/view/<filename>")
 def view_report(filename):
     return send_from_directory(str(_get_report_dir()), filename)
+
+
+# =============================================================================
+# 错误处理（防止 worker 崩溃）
+# =============================================================================
+
+@app.errorhandler(404)
+def not_found(e):
+    if request.path.startswith("/api/"):
+        return jsonify({"success": False, "error": f"API not found: {request.path}"}), 404
+    return render_template("index.html")
+
+@app.errorhandler(500)
+def server_error(e):
+    return jsonify({"success": False, "error": f"Internal error: {str(e)}"}), 500
 
 
 # =============================================================================
