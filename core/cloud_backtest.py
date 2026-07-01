@@ -598,8 +598,8 @@ def compare_strategies_cloud(
     Returns:
         Dict: {strategy_key: result_dict}
     """
-    if not kline_data or len(kline_data) < 15:
-        raise ValueError(f"K线数据不足({len(kline_data) if kline_data else 0}条)，无法回测 {stock_code}")
+    if not kline_data or len(kline_data) < 3:
+        raise ValueError(f"K线数据不足({len(kline_data) if kline_data else 0}条)，无法回测 {stock_code}。请选择更长的回溯天数（建议14天以上）。")
 
     print(f"[BACKTEST] 开始回测 {stock_code} ({len(kline_data)}条K线, {lookback_days}天, 资金{capital})")
     t0 = time.time()

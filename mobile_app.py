@@ -196,19 +196,14 @@ def _cloud_get_real_time_quote(stock_code: str):
     return None
 
 def _cloud_get_kline_data(stock_code: str, period: str = "daily", days: int = 60):
-    """获取K线数据（云端版）。使用 beg 参数严格限制起始日期，防止 API 返回上市以来全部历史数据。"""
+    """获取K线数据（云端版）。主源：东方财富push2his，备源：新浪财经"""
     import requests
     from datetime import datetime, timedelta
-    try:
-        sid = _secid(stock_code)
-        klt = {"daily": 101, "weekly": 102, "monthly": 103}.get(period, 101)
-        # 计算 beg 起始日期：往前推 days*2 天留余量
-        beg_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
-        url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get?secid={sid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt={klt}&fqt=1&end=20500101&beg={beg_date}&lmt={days + 10}"
-        resp = requests.get(url, headers=_headers(), timeout=15)
-        klines = resp.json().get("data", {}).get("klines", [])
+
+    def _parse_eastmoney_klines(klines_raw):
+        """解析东方财富K线原始数据"""
         records = []
-        for line in klines:
+        for line in klines_raw:
             parts = line.split(",")
             if len(parts) < 11:
                 continue
@@ -217,17 +212,81 @@ def _cloud_get_kline_data(stock_code: str, period: str = "daily", days: int = 60
                 "high": float(parts[3]), "low": float(parts[4]),
                 "volume": float(parts[5]), "amount": float(parts[6]),
             })
-        records.sort(key=lambda x: x["date"])
-        # 二次保险：只保留最近 days 条
-        result = records[-days:] if len(records) > days else records
-        # 日志
-        if result:
-            print(f"[KLINE] {stock_code}: 获取 {len(records)} 条, 截取 {len(result)} 条, "
-                  f"范围 {result[0]['date']} ~ {result[-1]['date']}")
-        return result
+        return records
+
+    # ---- 主源：东方财富 push2his ----
+    try:
+        sid = _secid(stock_code)
+        klt = {"daily": 101, "weekly": 102, "monthly": 103}.get(period, 101)
+        beg_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
+        url = (f"https://push2his.eastmoney.com/api/qt/stock/kline/get"
+               f"?secid={sid}&fields1=f1,f2,f3,f4,f5,f6"
+               f"&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
+               f"&klt={klt}&fqt=1&end=20500101&beg={beg_date}&lmt={days + 10}")
+        resp = requests.get(url, headers=_headers(), timeout=15)
+        klines = resp.json().get("data", {}).get("klines", [])
+        if klines:
+            records = _parse_eastmoney_klines(klines)
+            records.sort(key=lambda x: x["date"])
+            result = records[-days:] if len(records) > days else records
+            if result:
+                print(f"[KLINE] {stock_code} (来源:eastmoney): {len(result)}条, "
+                      f"范围 {result[0]['date']}~{result[-1]['date']}")
+                return result
+        print(f"[KLINE] {stock_code}: eastmoney返回空({len(klines)}条), 尝试备源...")
     except Exception as e:
-        print(f"[KLINE] {stock_code} 获取异常: {e}")
-        return None
+        print(f"[KLINE] {stock_code}: eastmoney异常: {e}, 尝试备源...")
+
+    # ---- 备源：新浪财经 K线API ----
+    try:
+        code_short = stock_code[-6:]
+        market_prefix = "sh" if code_short.startswith("6") else "sz"
+        sina_symbol = f"{market_prefix}{code_short}"
+        # 新浪财经历史K线接口
+        sina_url = (f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+                    f"CN_MarketData.getKLineData"
+                    f"?symbol={sina_symbol}&scale=240&ma=no&datalen={days + 10}")
+        resp = requests.get(sina_url, headers=_headers(), timeout=15)
+        # 返回格式: [{"day":"2026-07-01","open":...,"close":..., ...}, ...]
+        items = resp.json()
+        if items and isinstance(items, list):
+            records = []
+            for item in items:
+                d = item.get("day", "")
+                if not d:
+                    continue
+                def _sf(k, default=0):
+                    v = item.get(k)
+                    if v is None or v == "":
+                        return default
+                    try:
+                        return float(v)
+                    except (ValueError, TypeError):
+                        return default
+                records.append({
+                    "date": d,
+                    "open": _sf("open"),
+                    "close": _sf("close"),
+                    "high": _sf("high"),
+                    "low": _sf("low"),
+                    "volume": _sf("volume") / 100 if _sf("volume") > 0 else 0,
+                    "amount": _sf("turnover") * 10000 if _sf("turnover") > 0 else 0,
+                })
+            records.sort(key=lambda x: x["date"])
+            result = records[-days:] if len(records) > days else records
+            if result:
+                print(f"[KLINE] {stock_code} (来源:sina): {len(result)}条, "
+                      f"范围 {result[0]['date']}~{result[-1]['date']}")
+                return result
+            else:
+                print(f"[KLINE] {stock_code}: sina有数据但过滤后为空")
+        else:
+            print(f"[KLINE] {stock_code}: sina返回: type={type(items).__name__}")
+    except Exception as e:
+        print(f"[KLINE] {stock_code}: sina备源也失败: {e}")
+
+    print(f"[KLINE] {stock_code}: 所有数据源均失败，返回None")
+    return None
 
 def _cloud_get_stock_news(stock_code: str, days: int = 7, max_news: int = 50):
     import requests

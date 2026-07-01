@@ -177,58 +177,93 @@ def batch_get_news(stock_codes: List[str], days: int = DEFAULT_LOOKBACK_DAYS,
 # ======================================================================
 
 def get_kline_data(stock_code: str, period: str = "daily", days: int = 60) -> Optional[List[Dict]]:
-    """获取K线数据，返回 List[Dict]。使用 beg 参数严格限制起始日期，防止返回全量历史数据。"""
+    """获取K线数据，返回 List[Dict]。主源：东方财富push2his，备源：新浪财经"""
     import requests
     from datetime import datetime, timedelta
 
-    try:
-        secid = _get_secid(stock_code)
-        klt = {"daily": 101, "weekly": 102, "monthly": 103}.get(period, 101)
-
-        # 计算 beg 起始日期（往前推 days*2 天留余量），防止 API 忽略 lmt 返回全量历史数据
-        beg_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
-
-        url = (
-            f"https://push2his.eastmoney.com/api/qt/stock/kline/get"
-            f"?secid={secid}"
-            f"&fields1=f1,f2,f3,f4,f5,f6"
-            f"&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
-            f"&klt={klt}&fqt=1"
-            f"&end=20500101&beg={beg_date}&lmt={days + 10}"
-        )
-
-        resp = requests.get(url, headers=_get_headers(), timeout=8)
-        data = resp.json()
-        klines = data.get("data", {}).get("klines", [])
-
+    def _parse_eastmoney(klines_raw):
         records = []
-        for line in klines:
+        for line in klines_raw:
             parts = line.split(",")
             if len(parts) < 11:
                 continue
             records.append({
-                "date": parts[0],
-                "open": float(parts[1]),
-                "close": float(parts[2]),
-                "high": float(parts[3]),
-                "low": float(parts[4]),
-                "volume": float(parts[5]),
-                "amount": float(parts[6]),
+                "date": parts[0], "open": float(parts[1]), "close": float(parts[2]),
+                "high": float(parts[3]), "low": float(parts[4]),
+                "volume": float(parts[5]), "amount": float(parts[6]),
             })
+        return records
 
-        records.sort(key=lambda x: x["date"])
-        # 二次保险：只保留最近 days 条
-        result = records[-days:] if len(records) > days else records
-
-        # 日志：输出数据范围便于调试
-        if result:
-            print(f"[KLINE] {stock_code}: 获取 {len(records)} 条, 截取 {len(result)} 条, "
-                  f"范围 {result[0]['date']} ~ {result[-1]['date']}")
-        return result
-
+    # ---- 主源：东方财富 push2his ----
+    try:
+        secid = _get_secid(stock_code)
+        klt = {"daily": 101, "weekly": 102, "monthly": 103}.get(period, 101)
+        beg_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
+        url = (f"https://push2his.eastmoney.com/api/qt/stock/kline/get"
+               f"?secid={secid}&fields1=f1,f2,f3,f4,f5,f6"
+               f"&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
+               f"&klt={klt}&fqt=1&end=20500101&beg={beg_date}&lmt={days + 10}")
+        resp = requests.get(url, headers=_get_headers(), timeout=8)
+        data = resp.json()
+        klines = data.get("data", {}).get("klines", [])
+        if klines:
+            records = _parse_eastmoney(klines)
+            records.sort(key=lambda x: x["date"])
+            result = records[-days:] if len(records) > days else records
+            if result:
+                print(f"[KLINE] {stock_code} (来源:eastmoney): {len(result)}条, "
+                      f"范围 {result[0]['date']}~{result[-1]['date']}")
+                return result
+        print(f"[KLINE] {stock_code}: eastmoney返回空({len(klines)}条), 尝试备源...")
     except Exception as e:
-        print(f"[KLINE] {stock_code} 获取异常: {e}")
-        return None
+        print(f"[KLINE] {stock_code}: eastmoney异常: {e}, 尝试备源...")
+
+    # ---- 备源：新浪财经 K线API ----
+    try:
+        code_short = stock_code[-6:]
+        market_prefix = "sh" if code_short.startswith("6") else "sz"
+        sina_symbol = f"{market_prefix}{code_short}"
+        sina_url = (f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+                    f"CN_MarketData.getKLineData"
+                    f"?symbol={sina_symbol}&scale=240&ma=no&datalen={days + 10}")
+        resp = requests.get(sina_url, headers=_get_headers(), timeout=10)
+        items = resp.json()
+        if items and isinstance(items, list):
+            records = []
+            for item in items:
+                d = item.get("day", "")
+                if not d:
+                    continue
+                def _sf(key, default=0):
+                    v = item.get(key)
+                    if v is None or v == "":
+                        return default
+                    try:
+                        return float(v)
+                    except (ValueError, TypeError):
+                        return default
+                records.append({
+                    "date": d,
+                    "open": _sf("open"),
+                    "close": _sf("close"),
+                    "high": _sf("high"),
+                    "low": _sf("low"),
+                    "volume": _sf("volume") / 100 if _sf("volume") > 0 else 0,
+                    "amount": _sf("turnover") * 10000 if _sf("turnover") > 0 else 0,
+                })
+            records.sort(key=lambda x: x["date"])
+            result = records[-days:] if len(records) > days else records
+            if result:
+                print(f"[KLINE] {stock_code} (来源:sina): {len(result)}条, "
+                      f"范围 {result[0]['date']}~{result[-1]['date']}")
+                return result
+        else:
+            print(f"[KLINE] {stock_code}: sina返回: type={type(items).__name__}")
+    except Exception as e:
+        print(f"[KLINE] {stock_code}: sina备源也失败: {e}")
+
+    print(f"[KLINE] {stock_code}: 所有数据源均失败")
+    return None
 
 
 # ======================================================================
