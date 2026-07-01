@@ -465,7 +465,6 @@ def api_single_analysis():
         if analyzer is None:
             return jsonify({"success": False, "error": "情感分析引擎初始化失败，请稍后重试"})
         sentiment_result = analyzer.analyze(news_list)
-        del news_list
         _cleanup()
 
         kline_data = f["get_kline_data"](stock_code, days=max(60, days))
