@@ -590,9 +590,9 @@ def generate_report(
     score = overall.get("score", 0.5)
     label = overall.get("label", "中性")
     uid1 = f"gauge_{_uid()}"
-    charts.append(f'<div class="chart-card">{_plotly_gauge(uid1, score*100,
-        f"综合情感评分<br><span style=\'font-size:16px;color:{_label_color(label)}\'>{label}</span>",
-        color="#00ff88", height=300)}</div>')
+    gauge1_title = "综合情感评分<br><span style='font-size:16px;color:" + _label_color(label) + "'>" + label + "</span>"
+    gauge1_html = _plotly_gauge(uid1, score * 100, gauge1_title, color="#00ff88", height=300)
+    charts.append('<div class="chart-card">' + gauge1_html + '</div>')
 
     # Chart 2: 置信度
     conf = overall.get("confidence_index", 0.0)
