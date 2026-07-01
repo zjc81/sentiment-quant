@@ -179,8 +179,8 @@ function showResultModal(d) {
                 ${score}<span style="font-size:20px;">分</span>
             </div>
             <div style="text-align:center;font-size:18px;color:${color};margin-bottom:12px;">${d.label}</div>
-            <div class="info-row"><span>当前价格</span><span>${parseFloat(d.price||0).toFixed(2)}</span></div>
-            <div class="info-row"><span>涨跌幅</span><span style="color:${(d.pct_change||0)>=0?'var(--color-up)':'var(--color-down)'}">${parseFloat(d.pct_change||0).toFixed(2)}%</span></div>
+            <div class="info-row"><span>当前价格</span><span>${(function(){var v=Number(d.price);return isNaN(v)?'--':v.toFixed(2)})()}</span></div>
+            <div class="info-row"><span>涨跌幅</span><span style="color:${(Number(d.pct_change)||0)>=0?'var(--color-up)':'var(--color-down)'}">${(function(){var v=Number(d.pct_change);return isNaN(v)?'--%':(v>=0?'+':'')+v.toFixed(2)+'%'})()}</span></div>
             <div class="info-row"><span>新闻数量</span><span>${d.news_count}条</span></div>
             <div class="info-row"><span>正面/负面/中性</span><span>${d.positive_count}/${d.negative_count}/${d.neutral_count}</span></div>
             <div class="info-row"><span>置信度</span><span>${(d.confidence*100).toFixed(0)}%</span></div>

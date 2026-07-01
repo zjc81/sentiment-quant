@@ -79,32 +79,45 @@ function selectStock(code, name) {
 }
 
 async function runAnalysis() {
-    if (!selectedCode) {
-        const input = document.getElementById("stock-search").value.trim();
-        if (!input) return showToast("请先搜索并选择股票");
-        const resp = await fetch(`/api/search_stocks?q=${encodeURIComponent(input)}`);
-        const data = await resp.json();
-        if (data.success && data.data.length) {
-            selectStock(data.data[0].code, data.data[0].name);
-        } else { return showToast("未找到该股票"); }
-    }
-
-    showLoading("正在分析，请稍候（云端首次分析约需30-60秒）...");
     try {
+        // 如果没有通过下拉选择股票，尝试从输入框自动识别
+        if (!selectedCode) {
+            const input = (document.getElementById("stock-search").value || "").trim();
+            if (!input) { showToast("请先输入股票代码"); return; }
+            showToast("正在查找股票...");
+            try {
+                const resp = await fetch("/api/search_stocks?q=" + encodeURIComponent(input));
+                const data = await resp.json();
+                if (data.success && data.data && data.data.length) {
+                    selectStock(data.data[0].code, data.data[0].name);
+                } else { showToast("未找到该股票: " + input); return; }
+            } catch(e) { showToast("搜索失败: " + e.message); return; }
+        }
+
+        // 确认有选中的股票
+        if (!selectedCode) { showToast("股票代码为空"); return; }
+
+        showLoading("正在分析，请稍候（首次分析约需30-60秒）...");
+
+        const days = parseInt(document.getElementById("lookback-days").value) || 7;
+        const maxNews = parseInt(document.getElementById("max-news").value) || 20;
+
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 180000); // 3分钟超时
+        const timeoutId = setTimeout(function() { controller.abort(); }, 180000);
+
         const resp = await fetch("/api/single_analysis", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({
                 code: selectedCode,
                 name: selectedName,
-                days: parseInt(document.getElementById("lookback-days").value),
-                max_news: parseInt(document.getElementById("max-news").value)
+                days: days,
+                max_news: maxNews
             }),
             signal: controller.signal
         });
         clearTimeout(timeoutId);
+
         const data = await resp.json();
         if (data.success) {
             renderResult(data.data);
@@ -112,70 +125,61 @@ async function runAnalysis() {
             showToast(data.error || "分析失败");
         }
     } catch(e) {
-        showToast("错误: " + e.message);
+        console.error("[runAnalysis]", e);
+        showToast("分析出错: " + (e.message || String(e)));
+    } finally {
+        hideLoading();
     }
-    hideLoading();
 }
 
 function renderResult(d) {
-    const section = document.getElementById("result-section");
+    var section = document.getElementById("result-section");
     section.style.display = "block";
-    const score = (d.score * 100).toFixed(0);
-    const color = d.score >= 0.6 ? "var(--color-up)" : d.score >= 0.4 ? "var(--color-warn)" : "var(--color-down)";
+    var score = (d.score * 100).toFixed(0);
+    var color = d.score >= 0.6 ? "var(--color-up)" : (d.score >= 0.4 ? "var(--color-warn)" : "var(--color-down)");
 
-    document.getElementById("result-card").innerHTML = `
-        <div class="card-title">分析结果</div>
-        <div style="text-align:center;padding:12px 0;">
-            <div style="font-size:48px;font-weight:bold;color:${color};">${score}</div>
-            <div style="font-size:14px;color:var(--text-secondary);">综合情感得分 / 100</div>
-            <div style="font-size:20px;color:${color};margin-top:4px;">${d.label}</div>
-        </div>
-        <div class="info-row"><span>股票</span><span>${d.stock_code} ${d.stock_name}</span></div>
-        ${(()=>{
-            // 安全解析：处理 null / undefined / '' / 'NaN' / NaN 等各种异常值
-            function _safe(v) {
-                if (v === null || v === undefined || v === '') return null;
-                const n = Number(v);
-                return isNaN(n) ? null : n;
-            }
-            const priceVal = _safe(d.price);
-            const pctVal = _safe(d.pct_change);
-            const hasPrice = priceVal !== null;
-            const hasPct = pctVal !== null;
-            const priceStr = hasPrice ? priceVal.toFixed(2) : '--';
-            const pctStr = hasPct ? (pctVal >= 0 ? '+' : '') + pctVal.toFixed(2) + '%' : '--%';
-            const upColor  = 'var(--color-up)';
-            const dnColor  = 'var(--color-down)';
-            const pctColor = (!hasPrice && !hasPct) ? 'var(--text-secondary)' : ((hasPct && pctVal < 0) || (hasPrice && !hasPct) ? dnColor : upColor);
-            return \`
-        <div class="info-row">
-            <span>当前价格</span>
-            <strong style="font-size:17px;color:\${pctColor}">\${priceStr}</strong>
-        </div>
-        <div class="info-row">
-            <span>涨跌幅</span>
-            <span style="color:\${pctColor};font-weight:600;">\${pctStr}</span>
-        </div>\`;
-        })()}
-        <div class="info-row"><span>新闻总数</span><span>${d.news_count}条</span></div>
-        <div class="info-row"><span>正面/负面/中性</span><span style="color:var(--color-up)">${d.positive_count}</span> / <span style="color:var(--color-down)">${d.negative_count}</span> / ${d.neutral_count}</div>
-        <div class="info-row"><span>正面占比</span><span>${(d.positive_ratio*100).toFixed(0)}%</span></div>
-        <div class="info-row"><span>置信度</span><span>${(d.confidence*100).toFixed(0)}%</span></div>
-        <div class="info-row"><span>情感波动</span><span>${(d.volatility*100).toFixed(1)}% (${d.volatility_label})</span></div>
-        <div class="info-row"><span>风险等级</span><span>${d.risk_level}</span></div>
-        <div class="info-row"><span>影响级别</span><span>${d.impact_level}</span></div>
-        <div class="info-row"><span>投资者情绪指数</span><span>${d.investor_sentiment}</span></div>
-        <div style="margin-top:10px;padding:10px;background:var(--bg-card);border-radius:8px;font-size:13px;line-height:1.6;">
-            <div style="color:var(--accent);font-weight:500;margin-bottom:6px;">分析总结</div>
-            <div style="color:var(--text-secondary);">${d.summary_text}</div>
-        </div>
-        <div style="margin-top:8px;padding:10px;background:var(--bg-card);border-radius:8px;font-size:13px;line-height:1.6;">
-            <div style="color:var(--accent);font-weight:500;margin-bottom:6px;">市场预期</div>
-            <div style="color:var(--text-secondary);">${d.market_expectation}</div>
-        </div>
-        <div style="margin-top:12px;">
-            <a href="${d.report_url}" target="_blank" class="btn btn-primary btn-block" style="display:block;text-align:center;text-decoration:none;">查看完整HTML报告</a>
-        </div>`;
+    // 安全解析价格/涨跌幅 — 用纯字符串拼接，避免嵌套模板字符串的转义问题
+    var priceVal = null, pctVal = null;
+    if (d.price !== null && d.price !== undefined && d.price !== "" && String(d.price) !== "NaN") { priceVal = Number(d.price); if (isNaN(priceVal)) priceVal = null; }
+    if (d.pct_change !== null && d.pct_change !== undefined && d.pct_change !== "" && String(d.pct_change) !== "NaN") { pctVal = Number(d.pct_change); if (isNaN(pctVal)) pctVal = null; }
+    var priceStr = (priceVal !== null) ? priceVal.toFixed(2) : "--";
+    var hasPct = (pctVal !== null);
+    var pctStr = hasPct ? ((pctVal >= 0 ? "+" : "") + pctVal.toFixed(2) + "%") : "--%";
+    var upColor = "var(--color-up)";
+    var dnColor = "var(--color-down)";
+    if (priceVal === null && pctVal === null) { upColor = "var(--text-secondary)"; dnColor = "var(--text-secondary)"; }
+    var pctColor = (hasPct && pctVal < 0) ? dnColor : upColor;
+
+    var h = '<div class="card-title">分析结果</div>';
+    h += '<div style="text-align:center;padding:12px 0;">';
+    h += '<div style="font-size:48px;font-weight:bold;color:' + color + ';">' + score + '</div>';
+    h += '<div style="font-size:14px;color:var(--text-secondary);">综合情感得分 / 100</div>';
+    h += '<div style="font-size:20px;color:' + color + ';margin-top:4px;">' + (d.label || "") + '</div>';
+    h += '</div>';
+    h += '<div class="info-row"><span>股票</span><span>' + (d.stock_code || "") + ' ' + (d.stock_name || "") + '</span></div>';
+    h += '<div class="info-row"><span>当前价格</span><strong style="font-size:17px;color:' + pctColor + '">' + priceStr + '</strong></div>';
+    h += '<div class="info-row"><span>涨跌幅</span><span style="color:' + pctColor + ';font-weight:600;">' + pctStr + '</span></div>';
+    h += '<div class="info-row"><span>新闻总数</span><span>' + (d.news_count || 0) + '条</span></div>';
+    h += '<div class="info-row"><span>正面/负面/中性</span><span style="color:var(--color-up)">' + (d.positive_count || 0) + '</span> / <span style="color:var(--color-down)">' + (d.negative_count || 0) + '</span> / ' + (d.neutral_count || 0) + '</div>';
+    h += '<div class="info-row"><span>正面占比</span><span>' + (((d.positive_ratio || 0) * 100).toFixed(0)) + '%</span></div>';
+    h += '<div class="info-row"><span>置信度</span><span>' + (((d.confidence || 0) * 100).toFixed(0)) + '%</span></div>';
+    h += '<div class="info-row"><span>情感波动</span><span>' + (((d.volatility || 0) * 100).toFixed(1)) + '% (' + (d.volatility_label || "") + ')</span></div>';
+    h += '<div class="info-row"><span>风险等级</span><span>' + (d.risk_level || "--") + '</span></div>';
+    h += '<div class="info-row"><span>影响级别</span><span>' + (d.impact_level || "--") + '</span></div>';
+    h += '<div class="info-row"><span>投资者情绪指数</span><span>' + (d.investor_sentiment || "--") + '</span></div>';
+    h += '<div style="margin-top:10px;padding:10px;background:var(--bg-card);border-radius:8px;font-size:13px;line-height:1.6;">';
+    h += '<div style="color:var(--accent);font-weight:500;margin-bottom:6px;">分析总结</div>';
+    h += '<div style="color:var(--text-secondary);">' + (d.summary_text || "") + '</div>';
+    h += '</div>';
+    h += '<div style="margin-top:8px;padding:10px;background:var(--bg-card);border-radius:8px;font-size:13px;line-height:1.6;">';
+    h += '<div style="color:var(--accent);font-weight:500;margin-bottom:6px;">市场预期</div>';
+    h += '<div style="color:var(--text-secondary);">' + (d.market_expectation || "") + '</div>';
+    h += '</div>';
+
+    var reportUrl = d.report_url || "#";
+    h += '<div style="margin-top:12px;"><a href="' + reportUrl + '" target="_blank" class="btn btn-primary btn-block" style="display:block;text-align:center;text-decoration:none;">查看完整HTML报告</a></div>';
+
+    document.getElementById("result-card").innerHTML = h;
     section.scrollIntoView({behavior: "smooth"});
 }
 
