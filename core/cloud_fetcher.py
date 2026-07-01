@@ -240,30 +240,39 @@ def get_real_time_quote(stock_code: str) -> Optional[Dict]:
         if not d:
             return None
 
-        price = d.get("f43", 0) / 100 if d.get("f43") else 0
-        if price == 0:
-            price = d.get("f43", 0)
+        # 安全解析数值字段（防止 None/非数字值导致 TypeError 或 NaN）
+        def _safe_field(key, divisor=100, default=0):
+            raw = d.get(key)
+            if raw is None:
+                return default
+            try:
+                val = float(raw)
+                import math
+                if math.isnan(val) or math.isinf(val):
+                    return default
+                return val / divisor if divisor else val
+            except (ValueError, TypeError):
+                return default
 
-        pre_close = d.get("f44", 0) / 100 if d.get("f44") else 0
-        high = d.get("f45", 0) / 100 if d.get("f45") else 0
-        low = d.get("f46", 0) / 100 if d.get("f46") else 0
-        open_p = d.get("f47", 0) / 100 if d.get("f47") else 0
-        volume = d.get("f48", 0) / 100 if d.get("f48") else 0
-        amount = d.get("f50", 0)
-        turnover = d.get("f168", 0) / 100 if d.get("f168") else 0
-        pe = d.get("f162", 0) / 100 if d.get("f162") else None
-        pb = d.get("f167", 0) / 100 if d.get("f167") else None
-        market_cap = d.get("f116", d.get("f20", 0))
-        circ_cap = d.get("f117", d.get("f21", 0))
+        price = _safe_field("f43")
+        pre_close = _safe_field("f44")
+        high = _safe_field("f45")
+        low = _safe_field("f46")
+        open_p = _safe_field("f47")
+        volume = _safe_field("f48")
+        amount = _safe_field("f50", divisor=0)
+        turnover = _safe_field("f168")
+        pe = _safe_field("f162", default=None)
+        pb = _safe_field("f167", default=None)
 
         change = price - pre_close
-        pct_change = change / pre_close * 100 if pre_close else 0
+        pct_change = round(change / pre_close * 100, 2) if pre_close > 0 else 0
 
         return {
             "code": stock_code, "name": "",
-            "price": round(float(price), 2),
+            "price": round(float(price), 2) if price else 0,
             "change": round(float(change), 2),
-            "pct_change": round(float(pct_change), 2),
+            "pct_change": float(pct_change),
             "volume": float(volume),
             "amount": float(amount) if amount else 0,
             "high": round(float(high), 2),
@@ -273,8 +282,8 @@ def get_real_time_quote(stock_code: str) -> Optional[Dict]:
             "turnover": float(turnover),
             "pe": float(pe) if pe else None,
             "pb": float(pb) if pb else None,
-            "market_cap": float(market_cap) if market_cap else 0,
-            "circulating_cap": float(circ_cap) if circ_cap else 0,
+            "market_cap": float(d.get("f116", d.get("f20", 0)) or 0),
+            "circulating_cap": float(d.get("f117", d.get("f21", 0)) or 0),
         }
     except Exception:
         return None

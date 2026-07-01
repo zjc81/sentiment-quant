@@ -132,21 +132,29 @@ function renderResult(d) {
         </div>
         <div class="info-row"><span>股票</span><span>${d.stock_code} ${d.stock_name}</span></div>
         ${(()=>{
-            const hasPrice = d.price !== '--' && d.price !== null && d.price !== undefined && d.price !== '';
-            const hasPct   = d.pct_change !== '--' && d.pct_change !== null && d.pct_change !== undefined && d.pct_change !== '';
-            const priceStr = hasPrice ? parseFloat(d.price).toFixed(2) : '--';
-            const pctVal   = hasPct   ? parseFloat(d.pct_change) : null;
-            const pctStr   = pctVal !== null ? (pctVal >= 0 ? '+' : '') + pctVal.toFixed(2) + '%' : '--%';
+            // 安全解析：处理 null / undefined / '' / 'NaN' / NaN 等各种异常值
+            function _safe(v) {
+                if (v === null || v === undefined || v === '') return null;
+                const n = Number(v);
+                return isNaN(n) ? null : n;
+            }
+            const priceVal = _safe(d.price);
+            const pctVal = _safe(d.pct_change);
+            const hasPrice = priceVal !== null;
+            const hasPct = pctVal !== null;
+            const priceStr = hasPrice ? priceVal.toFixed(2) : '--';
+            const pctStr = hasPct ? (pctVal >= 0 ? '+' : '') + pctVal.toFixed(2) + '%' : '--%';
             const upColor  = 'var(--color-up)';
             const dnColor  = 'var(--color-down)';
-            const pctColor = pctVal === null ? 'var(--text-secondary)' : (pctVal >= 0 ? upColor : dnColor);
+            const pctColor = (!hasPrice && !hasPct) ? 'var(--text-secondary)' : ((hasPct && pctVal < 0) || (hasPrice && !hasPct) ? dnColor : upColor);
             return \`
         <div class="info-row">
-            <span>当前价格 / 涨跌幅</span>
-            <span style="display:flex;align-items:baseline;gap:10px;">
-                <strong style="font-size:17px;color:\${pctColor}">\${priceStr}</strong>
-                <span style="font-size:14px;color:\${pctColor};font-weight:600;">\${pctStr}</span>
-            </span>
+            <span>当前价格</span>
+            <strong style="font-size:17px;color:\${pctColor}">\${priceStr}</strong>
+        </div>
+        <div class="info-row">
+            <span>涨跌幅</span>
+            <span style="color:\${pctColor};font-weight:600;">\${pctStr}</span>
         </div>\`;
         })()}
         <div class="info-row"><span>新闻总数</span><span>${d.news_count}条</span></div>
