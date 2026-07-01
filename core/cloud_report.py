@@ -236,112 +236,121 @@ def _plotly_kline(uid, kline_data, sentiment_result, height=500):
     if not kline_data or len(kline_data) < 3:
         return ""
 
-    dates_full = [k.get("date", "") for k in kline_data]
-    dates_short = [d[-5:] if len(d) >= 10 else d for d in dates_full]
-    opens = [k.get("open", 0) for k in kline_data]
-    highs = [k.get("high", 0) for k in kline_data]
-    lows = [k.get("low", 0) for k in kline_data]
-    closes = [k.get("close", 0) for k in kline_data]
+    try:
+        dates_full = [k.get("date", "") for k in kline_data]
+        dates_short = [d[-5:] if len(d) >= 10 else d for d in dates_full]
+        opens = [k.get("open", 0) for k in kline_data]
+        highs = [k.get("high", 0) for k in kline_data]
+        lows = [k.get("low", 0) for k in kline_data]
+        closes = [k.get("close", 0) for k in kline_data]
 
-    # 计算均线 (纯Python)
-    ma5 = _sma(closes, 5)
-    ma20 = _sma(closes, 20)
+        # 计算均线 (纯Python)
+        ma5 = _sma(closes, 5)
+        ma20 = _sma(closes, 20)
 
-    # EMA
-    ema12 = _ema(closes, 12)
-    ema26 = _ema(closes, 26)
+        # EMA
+        ema12 = _ema(closes, 12)
+        ema26 = _ema(closes, 26)
 
-    # MACD
-    macd_line = [ema12[i] - ema26[i] for i in range(len(closes))]
-    signal_line = _ema(macd_line, 9)
-    macd_hist = [macd_line[i] - signal_line[i] for i in range(len(macd_line))]
+        # MACD (安全处理长度不一致)
+        n_min = min(len(ema12), len(ema26), len(closes))
+        macd_line = [ema12[i] - ema26[i] for i in range(n_min)]
+        signal_line = _ema(macd_line, 9)
+        macd_hist = [macd_line[i] - signal_line[i] for i in range(len(macd_line))]
 
-    # 情绪信号对齐
-    trend_data = sentiment_result.get("time_analysis", {}).get("trend", [])
-    date_score = {t["date"]: t["score"] * 100 for t in trend_data}
-    aligned_scores, aligned_dates = [], []
-    for i, fd in enumerate(dates_full):
-        if fd in date_score:
-            aligned_scores.append(date_score[fd])
-            aligned_dates.append(dates_short[i])
+        # 情绪信号对齐 (安全访问，防止 KeyError)
+        trend_data = sentiment_result.get("time_analysis", {}).get("trend", [])
+        date_score = {}
+        for t in trend_data:
+            d = t.get("date")
+            s = t.get("score")
+            if d is not None and s is not None:
+                date_score[d] = s * 100
+        aligned_scores, aligned_dates = [], []
+        for i, fd in enumerate(dates_full):
+            if fd in date_score:
+                aligned_scores.append(date_score[fd])
+                aligned_dates.append(dates_short[i])
 
-    traces = []
-    # K线 (Candlestick)
-    traces.append({
-        "type": "candlestick",
-        "x": dates_short, "open": opens, "high": highs, "low": lows, "close": closes,
-        "name": "K线",
-        "increasing": {"line": {"color": "#00ff88", "width": 1}, "fillcolor": "rgba(0,255,136,0.4)"},
-        "decreasing": {"line": {"color": "#ff4444", "width": 1}, "fillcolor": "rgba(255,68,68,0.4)"},
-        "xaxis": "x", "yaxis": "y",
-    })
-    # MA5
-    traces.append({
-        "type": "scatter", "x": dates_short, "y": ma5, "mode": "lines",
-        "name": "MA5", "line": {"color": "#4488ff", "width": 1.2}, "xaxis": "x", "yaxis": "y",
-    })
-    # MA20
-    traces.append({
-        "type": "scatter", "x": dates_short, "y": ma20, "mode": "lines",
-        "name": "MA20", "line": {"color": "#ff8844", "width": 1.2}, "xaxis": "x", "yaxis": "y",
-    })
-    # 情绪信号
-    if aligned_scores:
+        traces = []
+        # K线 (Candlestick)
         traces.append({
-            "type": "scatter", "x": aligned_dates, "y": aligned_scores,
-            "mode": "lines+markers", "name": "情绪信号",
-            "line": {"color": "#00ff88", "width": 2.5},
-            "marker": {"size": 6, "color": "#00ff88"},
-            "fill": "tozeroy", "fillcolor": "rgba(0,255,136,0.15)",
-            "xaxis": "x2", "yaxis": "y2",
+            "type": "candlestick",
+            "x": dates_short, "open": opens, "high": highs, "low": lows, "close": closes,
+            "name": "K线",
+            "increasing": {"line": {"color": "#00ff88", "width": 1}, "fillcolor": "rgba(0,255,136,0.4)"},
+            "decreasing": {"line": {"color": "#ff4444", "width": 1}, "fillcolor": "rgba(255,68,68,0.4)"},
+            "xaxis": "x", "yaxis": "y",
         })
-    # MACD 柱
-    traces.append({
-        "type": "bar", "x": dates_short, "y": macd_hist,
-        "marker": {"color": ["#00ff88" if v >= 0 else "#ff4444" for v in macd_hist]},
-        "name": "MACD柱", "opacity": 0.7, "xaxis": "x3", "yaxis": "y3",
-    })
-    # MACD线
-    traces.append({
-        "type": "scatter", "x": dates_short, "y": macd_line,
-        "mode": "lines", "name": "DIF", "line": {"color": "#4488ff", "width": 1.5},
-        "xaxis": "x3", "yaxis": "y3",
-    })
-    traces.append({
-        "type": "scatter", "x": dates_short, "y": signal_line,
-        "mode": "lines", "name": "DEA", "line": {"color": "#ff8844", "width": 1.5},
-        "xaxis": "x3", "yaxis": "y3",
-    })
+        # MA5
+        traces.append({
+            "type": "scatter", "x": dates_short, "y": ma5, "mode": "lines",
+            "name": "MA5", "line": {"color": "#4488ff", "width": 1.2}, "xaxis": "x", "yaxis": "y",
+        })
+        # MA20
+        traces.append({
+            "type": "scatter", "x": dates_short, "y": ma20, "mode": "lines",
+            "name": "MA20", "line": {"color": "#ff8844", "width": 1.2}, "xaxis": "x", "yaxis": "y",
+        })
+        # 情绪信号
+        if aligned_scores:
+            traces.append({
+                "type": "scatter", "x": aligned_dates, "y": aligned_scores,
+                "mode": "lines+markers", "name": "情绪信号",
+                "line": {"color": "#00ff88", "width": 2.5},
+                "marker": {"size": 6, "color": "#00ff88"},
+                "fill": "tozeroy", "fillcolor": "rgba(0,255,136,0.15)",
+                "xaxis": "x2", "yaxis": "y2",
+            })
+        # MACD 柱
+        traces.append({
+            "type": "bar", "x": dates_short, "y": macd_hist,
+            "marker": {"color": ["#00ff88" if v >= 0 else "#ff4444" for v in macd_hist]},
+            "name": "MACD柱", "opacity": 0.7, "xaxis": "x3", "yaxis": "y3",
+        })
+        # MACD线
+        traces.append({
+            "type": "scatter", "x": dates_short, "y": macd_line,
+            "mode": "lines", "name": "DIF", "line": {"color": "#4488ff", "width": 1.5},
+            "xaxis": "x3", "yaxis": "y3",
+        })
+        traces.append({
+            "type": "scatter", "x": dates_short, "y": signal_line,
+            "mode": "lines", "name": "DEA", "line": {"color": "#ff8844", "width": 1.5},
+            "xaxis": "x3", "yaxis": "y3",
+        })
 
-    layout = {
-        "template": _dark_template(),
-        "height": height,
-        "showlegend": True,
-        "legend": {"x": 0.01, "y": 0.99, "bgcolor": "rgba(26,26,46,0.8)", "font": {"size": 11}},
-        "hovermode": "x unified",
-        "margin": {"l": 30, "r": 30, "t": 40, "b": 30},
-        "grid": {"rows": 3, "columns": 1, "roworder": "top to bottom",
-                 "pattern": "independent", "ygap": 0.02},
-        "xaxis": {"anchor": "y", "domain": [0, 1], "rangeslider": {"visible": False}},
-        "yaxis": {"anchor": "x", "domain": [0.48, 1], "title": "价格"},
-        "xaxis2": {"anchor": "y2", "domain": [0, 1], "matches": "x"},
-        "yaxis2": {"anchor": "x2", "domain": [0.24, 0.46], "title": "情绪%", "range": [0, 100]},
-        "xaxis3": {"anchor": "y3", "domain": [0, 1], "matches": "x"},
-        "yaxis3": {"anchor": "x3", "domain": [0, 0.22], "title": "MACD"},
-        "shapes": [
-            {"type": "line", "x0": 0, "x1": 1, "xref": "x2 domain", "y0": 65, "y1": 65, "yref": "y2",
-             "line": {"color": "#88cc44", "dash": "dash", "width": 1}},
-            {"type": "line", "x0": 0, "x1": 1, "xref": "x2 domain", "y0": 35, "y1": 35, "yref": "y2",
-             "line": {"color": "#ff4444", "dash": "dash", "width": 1}},
-        ],
-        "annotations": [
-            {"text": "积极", "x": 1, "xanchor": "right", "xref": "x2 domain",
-             "y": 65, "yanchor": "bottom", "yref": "y2", "showarrow": False},
-            {"text": "消极", "x": 1, "xanchor": "right", "xref": "x2 domain",
-             "y": 35, "yanchor": "bottom", "yref": "y2", "showarrow": False},
-        ],
-    }
-    return _plotly_div(uid, traces, layout)
+        layout = {
+            "template": _dark_template(),
+            "height": height,
+            "showlegend": True,
+            "legend": {"x": 0.01, "y": 0.99, "bgcolor": "rgba(26,26,46,0.8)", "font": {"size": 11}},
+            "hovermode": "x unified",
+            "margin": {"l": 30, "r": 30, "t": 40, "b": 30},
+            "grid": {"rows": 3, "columns": 1, "roworder": "top to bottom",
+                     "pattern": "independent", "ygap": 0.02},
+            "xaxis": {"anchor": "y", "domain": [0, 1], "rangeslider": {"visible": False}},
+            "yaxis": {"anchor": "x", "domain": [0.48, 1], "title": "价格"},
+            "xaxis2": {"anchor": "y2", "domain": [0, 1], "matches": "x"},
+            "yaxis2": {"anchor": "x2", "domain": [0.24, 0.46], "title": "情绪%", "range": [0, 100]},
+            "xaxis3": {"anchor": "y3", "domain": [0, 1], "matches": "x"},
+            "yaxis3": {"anchor": "x3", "domain": [0, 0.22], "title": "MACD"},
+            "shapes": [
+                {"type": "line", "x0": 0, "x1": 1, "xref": "x2 domain", "y0": 65, "y1": 65, "yref": "y2",
+                 "line": {"color": "#88cc44", "dash": "dash", "width": 1}},
+                {"type": "line", "x0": 0, "x1": 1, "xref": "x2 domain", "y0": 35, "y1": 35, "yref": "y2",
+                 "line": {"color": "#ff4444", "dash": "dash", "width": 1}},
+            ],
+            "annotations": [
+                {"text": "积极", "x": 1, "xanchor": "right", "xref": "x2 domain",
+                 "y": 65, "yanchor": "bottom", "yref": "y2", "showarrow": False},
+                {"text": "消极", "x": 1, "xanchor": "right", "xref": "x2 domain",
+                 "y": 35, "yanchor": "bottom", "yref": "y2", "showarrow": False},
+            ],
+        }
+        return _plotly_div(uid, traces, layout)
+    except Exception as e:
+        return f'<div class="chart-error" style="color:#ff6644;padding:10px">K线图生成异常: {str(e)[:80]}</div>'
 
 
 # ======================================================================
