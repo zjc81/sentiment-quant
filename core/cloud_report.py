@@ -752,6 +752,9 @@ def generate_report(
     # 构建完整 HTML
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
+    # Python 3.11 兼容：f-string 表达式不能包含反斜杠，需提前定义变量
+    _NL = "\n"
+
     full_html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -864,11 +867,11 @@ def generate_report(
         {events_parts and f'''
         <div class="summary-box">
             <p><span class="label">📍 关键事件时间线</span></p>
-            <div style="display:flex;flex-wrap:wrap;margin-top:10px">{"\\n".join(events_parts)}</div>
+            <div style="display:flex;flex-wrap:wrap;margin-top:10px">{_NL.join(events_parts)}</div>
         </div>
         ''' or ''}
 
-        <div class="chart-grid">{"\\n".join(charts)}</div>
+        <div class="chart-grid">{_NL.join(charts)}</div>
 
         {topic_details and f'''
         <div class="summary-box">
@@ -880,14 +883,14 @@ def generate_report(
         {risk_parts and f'''
         <div class="summary-box">
             <p><span class="label">⚠️ 风险因素</span></p>
-            <div style="margin-top:10px">{"\\n".join(risk_parts)}</div>
+            <div style="margin-top:10px">{_NL.join(risk_parts)}</div>
         </div>
         ''' or ''}
 
         {news_parts and f'''
         <div class="summary-box">
             <p><span class="label">📰 相关新闻 <span style="color:#888;font-size:13px">（仅展示前10条）</span></span></p>
-            <div style="margin-top:10px">{"\\n".join(news_parts)}</div>
+            <div style="margin-top:10px">{_NL.join(news_parts)}</div>
         </div>
         ''' or ''}
     </div>
