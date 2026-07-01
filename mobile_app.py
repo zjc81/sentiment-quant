@@ -89,34 +89,62 @@ def _cloud_get_market_index():
     return result if result else None
 
 def _cloud_get_real_time_quote(stock_code: str):
-    import requests
-    try:
-        sid = _secid(stock_code)
-        url = f"https://push2.eastmoney.com/api/qt/stock/get?secid={sid}&fields=f43,f44,f45,f46,f47,f48,f50,f51,f52,f55,f57,f58,f115,f117,f162,f167,f168,f169,f170,f171"
-        resp = requests.get(url, headers=_headers(), timeout=10)
-        d = resp.json().get("data", {})
-        if not d:
+    """获取实时行情（云端版），带重试和详细日志"""
+    import requests, math, time
+
+    for attempt in range(2):  # 最多重试1次
+        try:
+            sid = _secid(stock_code)
+            url = f"https://push2.eastmoney.com/api/qt/stock/get?secid={sid}&fields=f43,f44,f45,f46,f47,f48,f50,f51,f52,f55,f57,f58,f115,f117,f162,f167,f168,f169,f170,f171"
+            resp = requests.get(url, headers=_headers(), timeout=10)
+            d = resp.json().get("data", {})
+            if not d:
+                print(f"[QUOTE] {stock_code} (attempt {attempt+1}): data为空")
+                if attempt == 0:
+                    time.sleep(0.5)
+                    continue
+                return None
+
+            def _sf(key, div=100, default=0):
+                raw = d.get(key)
+                if raw is None or raw == "":
+                    return default
+                try:
+                    v = float(raw)
+                    if math.isnan(v) or math.isinf(v):
+                        return default
+                    return v / div if div else v
+                except (ValueError, TypeError):
+                    return default
+
+            price = _sf("f43")
+            pre = _sf("f44")
+            chg = price - pre
+            pct = round(chg / pre * 100, 2) if pre > 0 else 0
+
+            result = {
+                "code": stock_code, "name": d.get("f58", ""),
+                "price": round(price, 2), "change": round(chg, 2), "pct_change": pct,
+                "volume": _sf("f48"), "amount": _sf("f50", div=0),
+                "high": round(_sf("f45"), 2), "low": round(_sf("f46"), 2),
+                "open": round(_sf("f47"), 2), "pre_close": round(pre, 2),
+                "turnover": _sf("f168"),
+                "pe": round(_sf("f162"), 2) if _sf("f162") != 0 else None,
+                "market_cap": _sf("f116", div=0, default=0) or _sf("f20", div=0, default=0),
+                "circulating_cap": _sf("f117", div=0, default=0) or _sf("f21", div=0, default=0),
+            }
+            print(f"[QUOTE] {stock_code}: 价格={result['price']}, 涨跌幅={result['pct_change']}%, 名称={result['name']}")
+            return result
+
+        except Exception as e:
+            print(f"[QUOTE] {stock_code} (attempt {attempt+1}) 异常: {e}")
+            if attempt == 0:
+                time.sleep(0.5)
+                continue
             return None
-        price = d.get("f43", 0) / 100 if d.get("f43") else 0
-        pre = d.get("f44", 0) / 100 if d.get("f44") else 0
-        chg = price - pre
-        pct = chg / pre * 100 if pre else 0
-        return {
-            "code": stock_code, "name": "",
-            "price": round(price, 2), "change": round(chg, 2), "pct_change": round(pct, 2),
-            "volume": d.get("f48", 0) / 100 if d.get("f48") else 0,
-            "amount": d.get("f50", 0) or 0,
-            "high": round(d.get("f45", 0) / 100, 2) if d.get("f45") else 0,
-            "low": round(d.get("f46", 0) / 100, 2) if d.get("f46") else 0,
-            "open": round(d.get("f47", 0) / 100, 2) if d.get("f47") else 0,
-            "pre_close": round(pre, 2),
-            "turnover": d.get("f168", 0) / 100 if d.get("f168") else 0,
-            "pe": d.get("f162", 0) / 100 if d.get("f162") else None,
-            "market_cap": d.get("f116", d.get("f20", 0)) or 0,
-            "circulating_cap": d.get("f117", d.get("f21", 0)) or 0,
-        }
-    except Exception:
-        return None
+
+    print(f"[QUOTE] {stock_code}: 全部重试失败，返回None")
+    return None
 
 def _cloud_get_kline_data(stock_code: str, period: str = "daily", days: int = 60):
     """获取K线数据（云端版）。使用 beg 参数严格限制起始日期，防止 API 返回上市以来全部历史数据。"""
@@ -485,6 +513,7 @@ def api_single_analysis():
 
         kline_data = f["get_kline_data"](stock_code, days=max(60, days))
         quote = f["get_real_time_quote"](stock_code)
+        print(f"[ANALYZE] 行情获取: quote={'OK' if quote else 'None'}")
         market = f["get_market_index"]()
         fund_flow = f["get_fund_flow"](stock_code, days=min(5, days))
         announcements = f["get_company_announcements"](stock_code, days=days)
@@ -528,9 +557,9 @@ def api_single_analysis():
             "impact_level": sentiment_result.get("impact_analysis", {}).get("importance_level", "未知"),
         }
 
-        # 安全提取 price / pct_change，防止 float('nan') 被序列化为 NaN
-        def _safe_num(val, fallback="--"):
-            """将值安全转为字符串，防止 NaN/None/Inf 进入 JSON"""
+        # 安全提取 price / pct_change，确保返回数字或 None（不返回字符串）
+        def _safe_num(val, fallback=None):
+            """将值安全转为 float，防止 NaN/None/Inf 进入 JSON"""
             if val is None:
                 return fallback
             try:
@@ -545,6 +574,8 @@ def api_single_analysis():
         _q = quote if isinstance(quote, dict) else {}
         summary["price"] = _safe_num(_q.get("price"))
         summary["pct_change"] = _safe_num(_q.get("pct_change"))
+        # 日志：输出行情数据是否获取成功
+        print(f"[QUOTE-OUT] price={summary['price']}, pct={summary['pct_change']}, quote_is_none={quote is None}")
         summary["report_url"] = f"/reports/view/{Path(report_path).name}" if report_path else None
         del sentiment_result, kline_data, quote, market, fund_flow, announcements
         _cleanup()
