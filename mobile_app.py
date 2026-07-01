@@ -89,61 +89,110 @@ def _cloud_get_market_index():
     return result if result else None
 
 def _cloud_get_real_time_quote(stock_code: str):
-    """获取实时行情（云端版），带重试和详细日志"""
+    """获取实时行情（云端版），主源：东方财富push2，备源：腾讯财经qt"""
     import requests, math, time
 
-    for attempt in range(2):  # 最多重试1次
+    def _sf_eastmoney(key, div=100, default=0):
+        raw = d.get(key)
+        if raw is None or raw == "":
+            return default
+        try:
+            v = float(raw)
+            if math.isnan(v) or math.isinf(v):
+                return default
+            return v / div if div else v
+        except (ValueError, TypeError):
+            return default
+
+    # ---- 主源：东方财富 push2 ----
+    for attempt in range(2):
         try:
             sid = _secid(stock_code)
             url = f"https://push2.eastmoney.com/api/qt/stock/get?secid={sid}&fields=f43,f44,f45,f46,f47,f48,f50,f51,f52,f55,f57,f58,f115,f117,f162,f167,f168,f169,f170,f171"
             resp = requests.get(url, headers=_headers(), timeout=10)
             d = resp.json().get("data", {})
-            if not d:
-                print(f"[QUOTE] {stock_code} (attempt {attempt+1}): data为空")
-                if attempt == 0:
-                    time.sleep(0.5)
-                    continue
-                return None
-
-            def _sf(key, div=100, default=0):
-                raw = d.get(key)
-                if raw is None or raw == "":
-                    return default
-                try:
-                    v = float(raw)
-                    if math.isnan(v) or math.isinf(v):
-                        return default
-                    return v / div if div else v
-                except (ValueError, TypeError):
-                    return default
-
-            price = _sf("f43")
-            pre = _sf("f44")
-            chg = price - pre
-            pct = round(chg / pre * 100, 2) if pre > 0 else 0
-
-            result = {
-                "code": stock_code, "name": d.get("f58", ""),
-                "price": round(price, 2), "change": round(chg, 2), "pct_change": pct,
-                "volume": _sf("f48"), "amount": _sf("f50", div=0),
-                "high": round(_sf("f45"), 2), "low": round(_sf("f46"), 2),
-                "open": round(_sf("f47"), 2), "pre_close": round(pre, 2),
-                "turnover": _sf("f168"),
-                "pe": round(_sf("f162"), 2) if _sf("f162") != 0 else None,
-                "market_cap": _sf("f116", div=0, default=0) or _sf("f20", div=0, default=0),
-                "circulating_cap": _sf("f117", div=0, default=0) or _sf("f21", div=0, default=0),
-            }
-            print(f"[QUOTE] {stock_code}: 价格={result['price']}, 涨跌幅={result['pct_change']}%, 名称={result['name']}")
-            return result
-
-        except Exception as e:
-            print(f"[QUOTE] {stock_code} (attempt {attempt+1}) 异常: {e}")
+            if d:
+                price = _sf_eastmoney("f43")
+                pre = _sf_eastmoney("f44")
+                if price > 0:
+                    chg = price - pre
+                    pct = round(chg / pre * 100, 2) if pre > 0 else 0
+                    result = {
+                        "code": stock_code, "name": d.get("f58", ""),
+                        "price": round(price, 2), "change": round(chg, 2), "pct_change": pct,
+                        "volume": _sf_eastmoney("f48"), "amount": _sf_eastmoney("f50", div=0),
+                        "high": round(_sf_eastmoney("f45"), 2), "low": round(_sf_eastmoney("f46"), 2),
+                        "open": round(_sf_eastmoney("f47"), 2), "pre_close": round(pre, 2),
+                        "turnover": _sf_eastmoney("f168"),
+                        "pe": round(_sf_eastmoney("f162"), 2) if _sf_eastmoney("f162") != 0 else None,
+                        "market_cap": _sf_eastmoney("f116", div=0, default=0) or _sf_eastmoney("f20", div=0, default=0),
+                        "circulating_cap": _sf_eastmoney("f117", div=0, default=0) or _sf_eastmoney("f21", div=0, default=0),
+                    }
+                    print(f"[QUOTE] {stock_code} (来源:eastmoney): 价格={result['price']}, 涨跌幅={result['pct_change']}%")
+                    return result
+            print(f"[QUOTE] {stock_code} (attempt {attempt+1}): eastmoney返回空或无有效价格")
             if attempt == 0:
                 time.sleep(0.5)
-                continue
-            return None
+        except Exception as e:
+            print(f"[QUOTE] {stock_code} (attempt {attempt+1}) eastmoney异常: {e}")
+            if attempt == 0:
+                time.sleep(0.5)
 
-    print(f"[QUOTE] {stock_code}: 全部重试失败，返回None")
+    # ---- 备源：腾讯财经 qt.gtimg.cn ----
+    print(f"[QUOTE] {stock_code}: eastmoney失败，尝试备源腾讯财经...")
+    try:
+        code_short = stock_code[-6:]
+        market_prefix = "sh" if code_short.startswith("6") else "sz"
+        qt_url = f"https://qt.gtimg.cn/q={market_prefix}{code_short}"
+        resp = requests.get(qt_url, headers=_headers(), timeout=10)
+        # 响应格式: v_sz000001="1~平安银行~000001~10.15~..."
+        raw = resp.text.strip()
+        # 用 find/rfind 提取引号内容（比正则更可靠）
+        start = raw.find('"')
+        end = raw.rfind('"')
+        if start == -1 or end == -1 or end <= start:
+            print(f"[QUOTE] {stock_code}: 腾讯财经无引号: {raw[:80]}")
+            return None
+        parts = raw[start+1:end].split("~")
+        if len(parts) < 5:
+            print(f"[QUOTE] {stock_code}: 腾讯财经字段不足: {len(parts)}")
+            return None
+        # 字段: [0]未知, [1]名称, [2]代码, [3]当前价, [4]昨收, [5]今开, ... [7]最高, [8]最低, [6]成交量(手), [37]换手率
+        name = parts[1]
+        price = float(parts[3])
+        pre = float(parts[4])
+        if price <= 0:
+            print(f"[QUOTE] {stock_code}: 腾讯财经价格无效={price}")
+            return None
+        chg = price - pre
+        pct = round(chg / pre * 100, 2) if pre > 0 else 0
+
+        def _safe_float(s, default=0):
+            try:
+                return float(s)
+            except (ValueError, TypeError):
+                return default
+
+        result = {
+            "code": stock_code, "name": name,
+            "price": round(price, 2), "change": round(chg, 2), "pct_change": pct,
+            "volume": _safe_float(parts[6]) if len(parts) > 6 else 0,
+            "amount": _safe_float(parts[37]) if len(parts) > 37 else 0,
+            "high": round(_safe_float(parts[33]), 2) if len(parts) > 33 else 0,
+            "low": round(_safe_float(parts[34]), 2) if len(parts) > 34 else 0,
+            "open": round(_safe_float(parts[5]), 2) if len(parts) > 5 else 0,
+            "pre_close": round(pre, 2),
+            "turnover": _safe_float(parts[38]) if len(parts) > 38 else 0,
+            "pe": _safe_float(parts[39]) if len(parts) > 39 else None,
+            "market_cap": _safe_float(parts[45]) if len(parts) > 45 else 0,
+            "circulating_cap": _safe_float(parts[44]) if len(parts) > 44 else 0,
+        }
+        print(f"[QUOTE] {stock_code} (来源:tencent): 价格={result['price']}, 涨跌幅={result['pct_change']}%")
+        return result
+    except Exception as e:
+        print(f"[QUOTE] {stock_code}: 腾讯财经也失败了: {e}")
+
+    print(f"[QUOTE] {stock_code}: 所有数据源均失败，返回None")
     return None
 
 def _cloud_get_kline_data(stock_code: str, period: str = "daily", days: int = 60):
