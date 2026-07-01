@@ -141,7 +141,7 @@ def _plotly_bar(uid, x, y, title, colors=None, text=None, height=350, hlines=Non
                 "y0": h["y"], "y1": h["y"], "yref": "y",
                 "line": {"color": h.get("color","#ffcc44"), "dash": "dash", "width": 1},
             })
-    return _plotly_div(uid, traces, layout)
+    return _plotly_div(uid, [trace], layout)
 
 
 def _plotly_radar(uid, r, theta, title, color="#00ff88", height=400):
