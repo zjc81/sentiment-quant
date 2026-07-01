@@ -15,7 +15,6 @@
 import re
 import math
 import hashlib
-import numpy as np
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
@@ -26,6 +25,28 @@ from config import (
     MAX_NEWS_PER_STOCK,
 )
 from utils.cache import FileCache
+
+
+def _mean(values: list) -> float:
+    """纯Python均值"""
+    return sum(values) / len(values) if values else 0.0
+
+def _std(values: list) -> float:
+    """纯Python标准差"""
+    if len(values) < 2:
+        return 0.0
+    m = _mean(values)
+    return math.sqrt(sum((x - m) ** 2 for x in values) / len(values))
+
+def _max_val(values):
+    return max(values) if values else 0
+
+def _min_val(values):
+    return min(values) if values else 0
+
+def _sum_cond(values, cond_fn):
+    """条件求和"""
+    return sum(1 for v in values if cond_fn(v))
 
 # ======================================================================
 # 主题分类（与原格式兼容）
@@ -166,7 +187,7 @@ class SentimentAnalyzer:
             })
 
         # ===== 1. 整体情感 =====
-        overall_score = np.mean([item["_score"] for item in analyzed_items])
+        overall_score = _mean([item["_score"] for item in analyzed_items])
         overall_label = self._score_to_label(overall_score)
 
         # 投资者情绪指数
@@ -192,15 +213,15 @@ class SentimentAnalyzer:
 
         # ===== 整合 =====
         # ✨ 新增: 情感波动率指标
-        scores_array = np.array([it["_score"] for it in analyzed_items])
-        sentiment_volatility = float(np.std(scores_array)) if len(scores_array) > 1 else 0.0
-        sentiment_range = float(np.max(scores_array) - np.min(scores_array)) if len(scores_array) > 1 else 0.0
+        scores_array = [it["_score"] for it in analyzed_items]
+        sentiment_volatility = float(_std(scores_array)) if len(scores_array) > 1 else 0.0
+        sentiment_range = float(_max_val(scores_array) - _min_val(scores_array)) if len(scores_array) > 1 else 0.0
         # 变异系数 (CV = std/mean, 衡量相对分散度)
-        mean_score = float(np.mean(scores_array)) if len(scores_array) > 0 else 0.5
+        mean_score = float(_mean(scores_array)) if len(scores_array) > 0 else 0.5
         cv = sentiment_volatility / mean_score if mean_score > 0 else 0.0
         # 正/中/负 计数及占比
-        pos_count = int(np.sum(scores_array > 0.55))
-        neg_count = int(np.sum(scores_array < 0.45))
+        pos_count = _sum_cond(scores_array, lambda x: x > 0.55)
+        neg_count = _sum_cond(scores_array, lambda x: x < 0.45)
         neutral_count = len(scores_array) - pos_count - neg_count
         pos_ratio = pos_count / len(scores_array) if len(scores_array) > 0 else 0.0
         neg_ratio = neg_count / len(scores_array) if len(scores_array) > 0 else 0.0
@@ -293,7 +314,7 @@ class SentimentAnalyzer:
             return 0.0
 
         # 1. 来源可靠性 (40%)
-        source_reliability = np.mean([item["_source_weight"] for item in items])
+        source_reliability = _mean([item["_source_weight"] for item in items])
 
         # 2. 时效性 (30%)
         now = datetime.now()
@@ -306,11 +327,11 @@ class SentimentAnalyzer:
                 timeliness_scores.append(score)
             except Exception:
                 timeliness_scores.append(0.3)
-        timeliness = np.mean(timeliness_scores)
+        timeliness = _mean(timeliness_scores)
 
         # 3. 一致性 (30%)
         scores = [item["_score"] for item in items]
-        std_dev = np.std(scores) if len(scores) > 1 else 0.3
+        std_dev = _std(scores) if len(scores) > 1 else 0.3
         consistency = max(0.0, min(1.0, 1 - std_dev))
 
         return 0.4 * source_reliability + 0.3 * timeliness + 0.3 * consistency
@@ -326,7 +347,7 @@ class SentimentAnalyzer:
         for date in sorted(date_groups.keys(), reverse=True):
             group = date_groups[date]
             scores = [g["_score"] for g in group]
-            avg = np.mean(scores)
+            avg = _mean(scores)
 
             # 关键事件
             key_events = []
@@ -447,7 +468,7 @@ class SentimentAnalyzer:
                     matched.append(item["_score"])
 
             if matched:
-                avg_score = np.mean(matched)
+                avg_score = _mean(matched)
                 result[cat_key] = {
                     "score": round(float(avg_score), 4),
                     "summary": f"共{len(matched)}条来源",
@@ -472,7 +493,7 @@ class SentimentAnalyzer:
         ]
         if self_media_scores:
             result["self_media"] = {
-                "score": round(float(np.mean(self_media_scores)), 4),
+                "score": round(float(_mean(self_media_scores)), 4),
                 "summary": f"共{len(self_media_scores)}条来源",
             }
         else:
@@ -486,10 +507,10 @@ class SentimentAnalyzer:
 
         # 影响力得分 = 情感强度的平均（偏离0.5的程度）
         impact_scores = [abs(s - 0.5) * 2 for s in scores]
-        avg_impact = np.mean(impact_scores)
+        avg_impact = _mean(impact_scores)
 
         # 重要性等级
-        avg_strength = abs(np.mean(scores) - 0.5) * 2
+        avg_strength = abs(_mean(scores) - 0.5) * 2
         news_count = len(items)
         if avg_strength > 0.6 and news_count > 10:
             importance = "高"
@@ -520,7 +541,7 @@ class SentimentAnalyzer:
     def _build_risk_analysis(self, items: List[Dict]) -> Dict:
         """构建风险分析"""
         scores = [item["_score"] for item in items]
-        avg_score = np.mean(scores)
+        avg_score = _mean(scores)
 
         # 负面新闻检测
         risk_factors = []

@@ -574,9 +574,12 @@ def view_report(filename):
 
 @app.route("/health")
 def health():
-    import psutil
-    mem = psutil.Process().memory_info().rss / 1024 / 1024
-    return jsonify({"status": "ok", "memory_mb": round(mem, 1)})
+    try:
+        import psutil
+        mem = psutil.Process().memory_info().rss / 1024 / 1024
+        return jsonify({"status": "ok", "memory_mb": round(mem, 1)})
+    except ImportError:
+        return jsonify({"status": "ok", "memory_mb": -1})
 
 
 # =============================================================================
