@@ -512,13 +512,29 @@ def api_single_analysis():
             "positive_count": overall.get("positive_count", 0),
             "negative_count": overall.get("negative_count", 0),
             "neutral_count": overall.get("neutral_count", 0),
-            "news_count": sentiment_result.get("total_count", 0),
+            "news_count": len(news_list),
             "risk_level": sentiment_result.get("risk_analysis", {}).get("risk_level", "未知"),
             "impact_level": sentiment_result.get("impact_analysis", {}).get("importance_level", "未知"),
-            "price": quote.get("price", "--") if quote else "--",
-            "pct_change": quote.get("pct_change", "--") if quote else "--",
-            "report_url": f"/reports/view/{Path(report_path).name}" if report_path else None
         }
+
+        # 安全提取 price / pct_change，防止 float('nan') 被序列化为 NaN
+        def _safe_num(val, fallback="--"):
+            """将值安全转为字符串，防止 NaN/None/Inf 进入 JSON"""
+            if val is None:
+                return fallback
+            try:
+                f = float(val)
+                import math
+                if math.isnan(f) or math.isinf(f):
+                    return fallback
+                return round(f, 2)
+            except (ValueError, TypeError):
+                return fallback
+
+        _q = quote if isinstance(quote, dict) else {}
+        summary["price"] = _safe_num(_q.get("price"))
+        summary["pct_change"] = _safe_num(_q.get("pct_change"))
+        summary["report_url"] = f"/reports/view/{Path(report_path).name}" if report_path else None
         del sentiment_result, kline_data, quote, market, fund_flow, announcements
         _cleanup()
         return jsonify({"success": True, "data": summary})
