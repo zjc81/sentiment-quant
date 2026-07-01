@@ -688,43 +688,92 @@ def api_batch_analysis():
 
 @app.route("/api/backtest", methods=["POST"])
 def api_backtest():
-    if IS_RENDER:
-        return jsonify({"success": False, "error": "回测功能仅支持桌面版，云端暂不可用"})
+    _bt0 = time.time()
     try:
-        from core.backtest import compare_strategies
         data = request.get_json()
         stock_code = data.get("code", "").strip()
         stock_name = data.get("name", "").strip()
         cfg = _get_config()
         lookback = int(data.get("lookback", cfg["DEFAULT_LOOKBACK_DAYS"]))
-        capital = float(data.get("capital", cfg["DEFAULT_START_CAPITAL"]))
+        capital = float(data.get("capital", 100000))
         if not stock_code:
             return jsonify({"success": False, "error": "请输入股票代码"})
+
+        f = _get_fetchers()
         if not stock_name:
-            f = _get_fetchers()
             info = f["get_stock_by_code"](stock_code)
             if info:
                 stock_name = info.get("name", stock_code)
-        results = compare_strategies(stock_code=stock_code, stock_name=stock_name, capital=capital, lookback_days=lookback)
-        all_results = list(results.values())
-        gen = _get_report_generator()
-        report_path = gen.generate_backtest_report(results=all_results, stock_name_map={r.stock_code: r.stock_name for r in all_results})
+
+        # 获取K线数据
+        kline_data = f["get_kline_data"](stock_code, days=max(60, lookback * 3))
+        print(f"[BT] K线获取: {len(kline_data) if kline_data else 0}条")
+
+        # 获取新闻+情感分析（情绪策略需要）
+        news_list = f["get_stock_news"](stock_code, days=lookback, max_news=30)
+        sentiment_result = None
+        if news_list:
+            analyzer = _get_sentiment_analyzer()
+            if analyzer:
+                sentiment_result = analyzer.analyze(news_list)
+                _cleanup()
+
         summary = []
-        for strategy, result in results.items():
-            summary.append({
-                "strategy": strategy, "strategy_name": _get_strategy_name(strategy),
-                "total_return": round(result.total_return, 2),
-                "annual_return": round(result.annual_return, 2),
-                "max_drawdown": round(result.max_drawdown, 2),
-                "sharpe_ratio": round(result.sharpe_ratio, 2),
-                "win_rate": round(result.win_rate, 2),
-                "total_trades": result.total_trades,
-                "final_value": round(result.final_value, 2),
-            })
-        best = max(summary, key=lambda x: x["total_return"])
-        del results, all_results
+
+        if IS_RENDER:
+            # ===== 云端：使用零依赖纯Python回测引擎 =====
+            from core.cloud_backtest import compare_strategies_cloud as cloud_bt
+            results = cloud_bt(
+                stock_code=stock_code, stock_name=stock_name,
+                capital=capital, lookback_days=lookback,
+                kline_data=kline_data or [], sentiment_result=sentiment_result or {},
+            )
+            for key, res in results.items():
+                if "error" in res and not res.get("total_return"):
+                    continue
+                summary.append({
+                    "strategy": key,
+                    "strategy_name": res.get("strategy_name", _get_strategy_name(key)),
+                    "total_return": res.get("total_return", 0),
+                    "annual_return": res.get("annual_return", 0),
+                    "max_drawdown": res.get("max_drawdown", 0),
+                    "sharpe_ratio": res.get("sharpe_ratio", 0),
+                    "win_rate": res.get("win_rate", 0),
+                    "total_trades": res.get("total_trades", 0),
+                    "final_value": res.get("final_value", capital),
+                })
+            report_url = None
+
+        else:
+            # ===== 桌面版：使用完整pandas回测引擎 + Plotly报告 =====
+            from core.backtest import compare_strategies
+            results = compare_strategies(stock_code=stock_code, stock_name=stock_name, capital=capital, lookback_days=lookback)
+            all_results = list(results.values())
+            gen = _get_report_generator()
+            report_path = gen.generate_backtest_report(results=all_results, stock_name_map={r.stock_code: r.stock_name for r in all_results})
+            for strategy, result in results.items():
+                summary.append({
+                    "strategy": strategy, "strategy_name": _get_strategy_name(strategy),
+                    "total_return": round(result.total_return, 2),
+                    "annual_return": round(result.annual_return, 2),
+                    "max_drawdown": round(result.max_drawdown, 2),
+                    "sharpe_ratio": round(result.sharpe_ratio, 2),
+                    "win_rate": round(result.win_rate, 2),
+                    "total_trades": result.total_trades,
+                    "final_value": round(result.final_value, 2),
+                })
+            report_url = f"/reports/view/{Path(report_path).name}"
+
+        best = max(summary, key=lambda x: x["total_return"]) if summary else None
+        del kline_data
         _cleanup()
-        return jsonify({"success": True, "data": summary, "best_strategy": best, "stock_code": stock_code, "stock_name": stock_name, "report_url": f"/reports/view/{Path(report_path).name}"})
+        elapsed = time.time() - _bt0
+        print(f"[BT] 回测总耗时: {elapsed:.1f}s")
+        return jsonify({
+            "success": True, "data": summary, "best_strategy": best,
+            "stock_code": stock_code, "stock_name": stock_name,
+            "report_url": report_url,
+        })
     except Exception as e:
         import traceback
         traceback.print_exc()
