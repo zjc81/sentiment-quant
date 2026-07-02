@@ -802,6 +802,7 @@ def api_backtest():
                     "final_value": res.get("final_value", capital),
                 })
             # 生成云端回测报告（Plotly.js CDN 交互式图表）
+            report_html_full = None
             try:
                 bt_report_path = generate_backtest_report(
                     stock_code=stock_code, stock_name=stock_name,
@@ -811,6 +812,13 @@ def api_backtest():
                 )
                 report_url = f"/reports/view/{Path(bt_report_path).name}"
                 print(f"[BT] 云端回测报告已生成: {bt_report_path}")
+                # Render多worker文件系统不共享，必须读回HTML内嵌返回
+                try:
+                    with open(bt_report_path, "r", encoding="utf-8") as _f:
+                        report_html_full = _f.read()
+                    print(f"[BT] 已读取报告HTML内嵌: {len(report_html_full)} bytes")
+                except Exception as _re:
+                    print(f"[BT] 读取报告文件失败: {_re}")
             except Exception as e:
                 import traceback as tb
                 print(f"[BT] 云端回测报告生成失败: {e}")
@@ -844,14 +852,13 @@ def api_backtest():
         print(f"[BT] 回测总耗时: {elapsed:.1f}s | report_url={report_url}")
 
         # 兜底：如果报告文件生成失败，生成内联HTML返回给前端
-        report_html_fallback = None
-        if not report_url and IS_RENDER:
+        if not report_html_full and IS_RENDER:
             try:
-                report_html_fallback = _generate_inline_backtest_html(
+                report_html_full = _generate_inline_backtest_html(
                     stock_code, stock_name, results if 'results' in dir() else {},
                     capital, lookback, summary, best,
                 )
-                print(f"[BT] 已生成内联兜底报告: {len(report_html_fallback)} bytes")
+                print(f"[BT] 已生成内联兜底报告: {len(report_html_full)} bytes")
             except Exception as e2:
                 print(f"[BT] 内联报告也失败: {e2}")
 
@@ -860,14 +867,101 @@ def api_backtest():
             "stock_code": stock_code, "stock_name": stock_name,
             "report_url": report_url,
         }
-        if report_html_fallback:
-            resp_data["report_html"] = report_html_fallback
+        if report_html_full:
+            resp_data["report_html"] = report_html_full
+            print(f"[BT] 返回report_html: {len(report_html_full)} bytes")
         return jsonify(resp_data)
     except Exception as e:
         import traceback
         traceback.print_exc()
         _cleanup()
         return jsonify({"success": False, "error": str(e)})
+
+
+# =============================================================================
+# 内联回测报告兜底函数（generate_backtest_report 失败时使用）
+# =============================================================================
+
+def _generate_inline_backtest_html(stock_code, stock_name, results, capital,
+                                    lookback, summary, best):
+    """生成轻量级内联回测报告HTML（不依赖cloud_report模块）"""
+    s = []
+    s.append('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">')
+    s.append('<meta name="viewport" content="width=device-width,initial-scale=1">')
+    s.append(f'<title>回测报告 - {stock_code} {stock_name}</title>')
+    s.append('<style>')
+    s.append('body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#1a1a2e;color:#e0e0e0;padding:20px;margin:0}')
+    s.append('.card{background:#16213e;border-radius:12px;padding:20px;margin:12px 0;border:1px solid #2a2a4a}')
+    s.append('h1{color:#00ff88;margin:0 0 8px 0}h2{color:#4488ff;font-size:16px;margin:0 0 12px 0}')
+    s.append('.stat-grid{display:flex;flex-wrap:wrap;gap:12px}')
+    s.append('.stat-item{flex:1;min-width:120px;background:#1a1a2e;border-radius:8px;padding:12px;text-align:center}')
+    s.append('.stat-value{font-size:24px;font-weight:bold}.stat-label{font-size:12px;color:#888;margin-top:4px}')
+    s.append('.up{color:#ff4444}.down{color:#00ff88}')
+    s.append('table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}')
+    s.append('th{background:#1a1a2e;padding:10px 8px;text-align:left;color:#888;border-bottom:2px solid #2a2a4a}')
+    s.append('td{padding:10px 8px;border-bottom:1px solid #2a2a4a}')
+    s.append('tr:hover td{background:#1e2a4a}')
+    s.append('.tag{padding:2px 8px;border-radius:4px;font-size:11px;font-weight:bold}')
+    s.append('.tag-buy{background:#ff444433;color:#ff4444}.tag-sell{background:#00ff8833;color:#00ff88}')
+    s.append('</style></head><body>')
+    s.append(f'<h1>📊 回测报告</h1>')
+    s.append(f'<p style="color:#888;margin:0 0 16px 0">{stock_code} {stock_name} | 回溯{lookback}天 | 初始资金¥{capital:,.0f} | {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>')
+
+    # 最佳策略卡片
+    if best:
+        ret = best.get("total_return", 0)
+        clr = "#ff4444" if ret >= 0 else "#00ff88"
+        s.append(f'<div class="card" style="border-left:4px solid {clr}">')
+        s.append(f'<h2>🏆 最佳策略: {best.get("strategy_name","")}</h2>')
+        s.append(f'<div class="stat-grid">')
+        s.append(f'<div class="stat-item"><div class="stat-value" style="color:{clr}">{ret:+.2f}%</div><div class="stat-label">总收益</div></div>')
+        s.append(f'<div class="stat-item"><div class="stat-value">¥{best.get("final_value",capital):,.0f}</div><div class="stat-label">最终净值</div></div>')
+        s.append(f'<div class="stat-item"><div class="stat-value">{best.get("sharpe_ratio",0):.2f}</div><div class="stat-label">夏普比率</div></div>')
+        s.append(f'<div class="stat-item"><div class="stat-value">{best.get("max_drawdown",0):.2f}%</div><div class="stat-label">最大回撤</div></div>')
+        s.append(f'</div></div>')
+
+    # 策略对比表
+    if summary:
+        s.append(f'<div class="card"><h2>📋 策略对比</h2>')
+        s.append(f'<table><thead><tr><th>策略</th><th>总收益%</th><th>年化%</th><th>回撤%</th><th>夏普</th><th>胜率%</th><th>交易次数</th></tr></thead><tbody>')
+        for row in summary:
+            tr = row.get("total_return", 0)
+            clr = "#ff4444" if tr >= 0 else "#00ff88"
+            s.append(f'<tr><td>{row.get("strategy_name","")}</td>')
+            s.append(f'<td style="color:{clr};font-weight:bold">{tr:+.2f}%</td>')
+            s.append(f'<td>{row.get("annual_return",0):.2f}%</td><td>{row.get("max_drawdown",0):.2f}%</td>')
+            s.append(f'<td>{row.get("sharpe_ratio",0):.2f}</td><td>{row.get("win_rate",0):.1f}%</td>')
+            s.append(f'<td>{row.get("total_trades",0)}</td></tr>')
+        s.append(f'</tbody></table></div>')
+
+    # 交易记录（如果有）
+    _strat_names_inline = {
+        "buy_hold": "买入持有", "sentiment_only": "纯情绪信号",
+        "sentiment_ma": "情绪+均线", "rsi_mean_reversion": "RSI均值回归",
+        "bollinger_breakout": "布林带突破", "momentum": "动量策略",
+    }
+    for key, res in results.items():
+        trades = res.get("trades", [])
+        if trades:
+            sn = _strat_names_inline.get(key, key)
+            s.append(f'<div class="card"><h2>📝 交易记录 - {sn}</h2>')
+            s.append(f'<table><thead><tr><th>日期</th><th>方向</th><th>价格</th><th>数量</th><th>金额</th><th>原因</th></tr></thead><tbody>')
+            for t in trades[:20]:
+                is_buy = t.get("type") == "buy"
+                tag_cls = "tag-buy" if is_buy else "tag-sell"
+                tag_txt = "买入" if is_buy else "卖出"
+                s.append(f'<tr><td>{t.get("date","")}</td>')
+                s.append(f'<td><span class="tag {tag_cls}">{tag_txt}</span></td>')
+                s.append(f'<td>¥{t.get("price",0):.2f}</td><td>{t.get("shares",0)}</td>')
+                s.append(f'<td>¥{t.get("value",0):,.0f}</td><td style="color:#888;font-size:11px">{t.get("reason","")}</td></tr>')
+            s.append(f'</tbody></table></div>')
+            break  # 只显示第一个策略的交易
+
+    s.append('<div style="text-align:center;color:#555;font-size:11px;margin-top:20px;padding:10px">')
+    s.append('SentimentQuant - 内联回测报告')
+    s.append('</div></body></html>')
+    return "\n".join(s)
+
 
 @app.route("/api/reports")
 def api_reports():

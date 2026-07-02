@@ -139,23 +139,26 @@ function renderBtResult(data) {
                 </tr>`;
             }).join("")}</tbody></table>`;
 
-    // 完整回测报告按钮（防御性处理空URL + 支持内联HTML）
+    // 完整回测报告按钮（Blob URL方案，彻底解决Render多worker文件不共享问题）
     const reportBox = document.getElementById("bt-report-link");
-    if (data.report_url && data.report_url !== "null" && data.report_url !== "undefined" && data.report_url !== "None") {
+    if (data.report_html) {
+        // 优先使用内嵌HTML（Blob URL在新标签页打开，绕过文件系统）
+        const blob = new Blob([data.report_html], {type: "text/html;charset=utf-8"});
+        const blobUrl = URL.createObjectURL(blob);
+        reportBox.innerHTML = `
+            <a href="${blobUrl}" target="_blank"
+               class="btn btn-primary btn-block"
+               style="display:block;text-align:center;text-decoration:none;"
+               onclick="setTimeout(() => URL.revokeObjectURL('${blobUrl}'), 30000)">
+                查看完整回测报告 ↗
+            </a>`;
+    } else if (data.report_url && data.report_url !== "null" && data.report_url !== "undefined" && data.report_url !== "None") {
         reportBox.innerHTML = `
             <a href="${data.report_url}" target="_blank"
                class="btn btn-primary btn-block"
                style="display:block;text-align:center;text-decoration:none;">
                 查看完整回测报告 ↗
             </a>`;
-    } else if (data.report_html) {
-        // 内联HTML兜底模式（文件写入失败时）
-        reportBox.innerHTML = `
-            <div id="inline-report-container" style="margin-top:10px;"></div>
-            <button class="btn btn-primary btn-block"
-                    style="display:block;text-align:center;margin-top:8px;"
-                    onclick="showInlineReport()">展开内联回测报告 ▼</button>`;
-        window._inlineReportHtml = data.report_html;
     } else {
         reportBox.innerHTML = `
             <div class="btn btn-block"
@@ -163,16 +166,6 @@ function renderBtResult(data) {
                 报告生成暂不可用
             </div>`;
     }
-
-function showInlineReport() {
-    const container = document.getElementById("inline-report-container");
-    if (container && window._inlineReportHtml) {
-        container.innerHTML = window._inlineReportHtml;
-        container.style.display = "block";
-        event.target.style.display = "none";
-        container.scrollIntoView({behavior: "smooth"});
-    }
-}
 
     section.scrollIntoView({behavior: "smooth"});
 }
