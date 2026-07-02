@@ -1007,14 +1007,16 @@ def server_error(e):
 # 健康检查
 # =============================================================================
 
+APP_VERSION = "2026-07-02-blob-url-v3"
+
 @app.route("/health")
 def health():
     try:
         import psutil
         mem = psutil.Process().memory_info().rss / 1024 / 1024
-        return jsonify({"status": "ok", "memory_mb": round(mem, 1)})
+        return jsonify({"status": "ok", "memory_mb": round(mem, 1), "version": APP_VERSION})
     except ImportError:
-        return jsonify({"status": "ok", "memory_mb": -1})
+        return jsonify({"status": "ok", "memory_mb": -1, "version": APP_VERSION})
 
 
 # =============================================================================
