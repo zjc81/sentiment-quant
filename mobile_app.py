@@ -507,7 +507,18 @@ _warmup()
 # 云端报告生成器（纯 Python + Plotly.js CDN，零外部依赖）
 # =============================================================================
 
-from core.cloud_report import generate_report, generate_backtest_report
+try:
+    from core.cloud_report import generate_report, generate_backtest_report
+    print("[INIT] cloud_report 导入成功")
+except Exception as _cr_err:
+    import traceback as _cr_tb
+    print(f"[INIT] cloud_report 导入失败: {_cr_err}")
+    print(_cr_tb.format_exc())
+    # 降级：提供空实现，避免整个 app 崩溃
+    def generate_report(*args, **kwargs):
+        raise RuntimeError(f"cloud_report 模块不可用: {_cr_err}")
+    def generate_backtest_report(*args, **kwargs):
+        raise RuntimeError(f"cloud_report 模块不可用: {_cr_err}")
 
 
 # =============================================================================
