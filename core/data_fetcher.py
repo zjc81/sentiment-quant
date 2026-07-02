@@ -64,7 +64,7 @@ def get_all_stocks(force_refresh: bool = False) -> pd.DataFrame:
         except Exception:
             pass
 
-            try:
+    try:
         import akshare as ak
         df = _safe_ak_call(ak.stock_info_a_code_name)
         df = df.rename(columns={"code": "code", "name": "name"})

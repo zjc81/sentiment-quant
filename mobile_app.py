@@ -766,7 +766,8 @@ def api_backtest():
 
         # 获取K线数据
         kline_data = f["get_kline_data"](stock_code, days=max(60, lookback * 3))
-        print(f"[BT] K线获取: {len(kline_data) if kline_data else 0}条")
+        kline_len = len(kline_data) if kline_data is not None and (not hasattr(kline_data, 'empty') or not kline_data.empty) else 0
+        print(f"[BT] K线获取: {kline_len}条")
 
         # 获取新闻+情感分析（情绪策略需要）
         news_list = f["get_stock_news"](stock_code, days=lookback, max_news=30)
@@ -778,6 +779,7 @@ def api_backtest():
                 _cleanup()
 
         summary = []
+        report_html_full = None
 
         if IS_RENDER:
             # ===== 云端：使用零依赖纯Python回测引擎 + 生成HTML报告 =====
@@ -844,6 +846,12 @@ def api_backtest():
                     "final_value": round(result.final_value, 2),
                 })
             report_url = f"/reports/view/{Path(report_path).name}"
+            # 桌面版也读回HTML内嵌（统一Blob URL方案）
+            try:
+                with open(report_path, "r", encoding="utf-8") as _f:
+                    report_html_full = _f.read()
+            except Exception:
+                pass
 
         best = max(summary, key=lambda x: x["total_return"]) if summary else None
         del kline_data
