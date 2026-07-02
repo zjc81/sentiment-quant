@@ -812,7 +812,9 @@ def api_backtest():
                 report_url = f"/reports/view/{Path(bt_report_path).name}"
                 print(f"[BT] 云端回测报告已生成: {bt_report_path}")
             except Exception as e:
+                import traceback as tb
                 print(f"[BT] 云端回测报告生成失败: {e}")
+                print(f"[BT] 报告异常详情:\n{tb.format_exc()}")
                 report_url = None
 
         else:
@@ -839,12 +841,28 @@ def api_backtest():
         del kline_data
         _cleanup()
         elapsed = time.time() - _bt0
-        print(f"[BT] 回测总耗时: {elapsed:.1f}s")
-        return jsonify({
+        print(f"[BT] 回测总耗时: {elapsed:.1f}s | report_url={report_url}")
+
+        # 兜底：如果报告文件生成失败，生成内联HTML返回给前端
+        report_html_fallback = None
+        if not report_url and IS_RENDER:
+            try:
+                report_html_fallback = _generate_inline_backtest_html(
+                    stock_code, stock_name, results if 'results' in dir() else {},
+                    capital, lookback, summary, best,
+                )
+                print(f"[BT] 已生成内联兜底报告: {len(report_html_fallback)} bytes")
+            except Exception as e2:
+                print(f"[BT] 内联报告也失败: {e2}")
+
+        resp_data = {
             "success": True, "data": summary, "best_strategy": best,
             "stock_code": stock_code, "stock_name": stock_name,
             "report_url": report_url,
-        })
+        }
+        if report_html_fallback:
+            resp_data["report_html"] = report_html_fallback
+        return jsonify(resp_data)
     except Exception as e:
         import traceback
         traceback.print_exc()

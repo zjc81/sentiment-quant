@@ -139,8 +139,40 @@ function renderBtResult(data) {
                 </tr>`;
             }).join("")}</tbody></table>`;
 
-    document.getElementById("bt-report-link").innerHTML = `
-        <a href="${data.report_url}" target="_blank" class="btn btn-primary btn-block" style="display:block;text-align:center;text-decoration:none;">查看完整回测报告</a>`;
+    // 完整回测报告按钮（防御性处理空URL + 支持内联HTML）
+    const reportBox = document.getElementById("bt-report-link");
+    if (data.report_url && data.report_url !== "null" && data.report_url !== "undefined" && data.report_url !== "None") {
+        reportBox.innerHTML = `
+            <a href="${data.report_url}" target="_blank"
+               class="btn btn-primary btn-block"
+               style="display:block;text-align:center;text-decoration:none;">
+                查看完整回测报告 ↗
+            </a>`;
+    } else if (data.report_html) {
+        // 内联HTML兜底模式（文件写入失败时）
+        reportBox.innerHTML = `
+            <div id="inline-report-container" style="margin-top:10px;"></div>
+            <button class="btn btn-primary btn-block"
+                    style="display:block;text-align:center;margin-top:8px;"
+                    onclick="showInlineReport()">展开内联回测报告 ▼</button>`;
+        window._inlineReportHtml = data.report_html;
+    } else {
+        reportBox.innerHTML = `
+            <div class="btn btn-block"
+                 style="display:block;text-align:center;opacity:0.5;cursor:not-allowed;background:var(--bg-card);border:1px dashed var(--border);color:var(--text-muted);padding:12px;border-radius:8px;font-size:13px;">
+                报告生成暂不可用
+            </div>`;
+    }
+
+function showInlineReport() {
+    const container = document.getElementById("inline-report-container");
+    if (container && window._inlineReportHtml) {
+        container.innerHTML = window._inlineReportHtml;
+        container.style.display = "block";
+        event.target.style.display = "none";
+        container.scrollIntoView({behavior: "smooth"});
+    }
+}
 
     section.scrollIntoView({behavior: "smooth"});
 }

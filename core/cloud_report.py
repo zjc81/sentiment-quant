@@ -960,6 +960,9 @@ def generate_backtest_report(
     Returns:
         生成的HTML文件路径
     """
+    # ---- 入口防御：检查最小数据要求 ----
+    if not results:
+        raise ValueError("回测结果为空")
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     _NL = "\n"
 
